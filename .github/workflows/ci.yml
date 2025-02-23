@@ -30,8 +30,18 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Install root dependencies
         run: npm ci --legacy-peer-deps
+
+      - name: Install eth-contracts dependencies
+        working-directory: apps/eth-contracts
+        run: |
+          npm ci
+          npm install --save-dev hardhat@2.22.18
+
+      - name: Compile Contracts
+        working-directory: apps/eth-contracts
+        run: npx hardhat compile
 
       - name: Set up Nx SHAs
         uses: nrwl/nx-set-shas@v4
