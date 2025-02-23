@@ -1,0 +1,26 @@
+{
+  "wake.compiler.solc.remappings": [
+    "@arbitrum/=node_modules/@arbitrum/",
+    "@chainlink/=node_modules/@chainlink/",
+    "@eth-optimism/=node_modules/@chainlink/contracts/node_modules/@eth-optimism/",
+    "@offchainlabs/=node_modules/@offchainlabs/",
+    "@openzeppelin/=node_modules/@openzeppelin/",
+    "@scroll-tech/=node_modules/@scroll-tech/",
+    "@zksync/=node_modules/@zksync/",
+    "eth-contracts/=node_modules/eth-contracts/",
+    "eth-gas-reporter/=node_modules/eth-gas-reporter/",
+    "hardhat/=node_modules/hardhat/"
+  ],
+  "solidity.packageDefaultDependenciesContractsDirectory": "apps/eth-contracts/contracts",
+  "solidity.packageDefaultDependenciesDirectory": "node_modules",
+  "solidity.remappings": [
+    "@openzeppelin/=node_modules/@openzeppelin/",
+    "@chainlink/=node_modules/@chainlink/",
+    "hardhat/=node_modules/hardhat/",
+    "@arbitrum/=node_modules/@arbitrum/",
+    "@eth-optimism/=node_modules/@eth-optimism/",
+    "@offchainlabs/=node_modules/@offchainlabs/",
+    "@scroll-tech/=node_modules/@scroll-tech/",
+    "@zksync/=node_modules/@zksync/"
+  ]
+}

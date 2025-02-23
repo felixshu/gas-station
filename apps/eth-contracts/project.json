@@ -1,0 +1,50 @@
+{
+	"name": "eth-contracts",
+	"root": "apps/eth-contracts",
+	"sourceRoot": "apps/eth-contracts",
+	"projectType": "application",
+	"targets": {
+		"typecheck": {
+			"executor": "nx:run-commands",
+			"options": {
+				"command": "tsc --noEmit",
+				"cwd": "apps/eth-contracts"
+			}
+		},
+		"compile": {
+			"executor": "nx:run-commands",
+			"options": {
+				"command": "npx hardhat compile",
+				"cwd": "apps/eth-contracts"
+			}
+		},
+		"test": {
+			"executor": "nx:run-commands",
+			"options": {
+				"command": "npx hardhat test",
+				"cwd": "apps/eth-contracts"
+			}
+		},
+		"lint": {
+			"executor": "nx:run-commands",
+			"options": {
+				"command": "npx hardhat check",
+				"cwd": "apps/eth-contracts"
+			}
+		},
+		"clean": {
+			"executor": "nx:run-commands",
+			"options": {
+				"command": "npx hardhat clean",
+				"cwd": "apps/eth-contracts"
+			}
+		},
+		"deploy": {
+			"executor": "nx:run-commands",
+			"options": {
+				"command": "npx hardhat run scripts/deploy.js --network sepolia",
+				"cwd": "apps/eth-contracts"
+			}
+		}
+	}
+}
