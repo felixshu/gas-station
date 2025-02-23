@@ -1,61 +1,46 @@
-name: Smart Contract CI
+name: CI
 
 on:
   push:
     branches:
       - main
-    paths:
-      - 'apps/eth-contracts/**'
   pull_request:
-    paths:
-      - 'apps/eth-contracts/**'
+
+permissions:
+  actions: read
+  contents: read
 
 jobs:
-  validate:
+  main:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/eth-contracts
-
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # This enables task distribution via Nx Cloud
+      # Run this command as early as possible, before dependencies are installed
+      # Learn more at https://nx.dev/ci/reference/nx-cloud-cli#npx-nxcloud-startcirun
+      # Uncomment this line to enable task distribution
+      # - run: npx nx-cloud start-ci-run --distribute-on="3 linux-medium-js" --stop-agents-after="build"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
-      - name: Check contract sizes
-        run: npx hardhat size-contracts
+      - name: Set up Nx SHAs
+        uses: nrwl/nx-set-shas@v4
 
-      - name: Compile contracts
-        run: npx hardhat compile
+      # Prepend any command with "nx-cloud record --" to record its logs to Nx Cloud
+      # - run: npx nx-cloud record -- echo Hello World
+      # Nx Affected runs only tasks affected by the changes in this PR/commit. Learn more: https://nx.dev/ci/features/affected
+      - name: Lint
+        run: npx nx affected -t lint --parallel=3
 
-      - name: Run solhint
-        run: npx solhint 'contracts/**/*.sol'
-
-      - name: Check formatting
-        run: npx prettier --check 'contracts/**/*.sol'
-
-  # Keeping test job commented out for future implementation
-  # test:
-  #   needs: validate
-  #   runs-on: ubuntu-latest
-  #   defaults:
-  #     run:
-  #       working-directory: apps/eth-contracts
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '20'
-  #         cache: 'npm'
-  #     - name: Install dependencies
-  #       run: npm ci
-  #     - name: Run tests
-  #       run: npx hardhat test
+      - name: Build
+        run: npx nx affected -t build --parallel=3
