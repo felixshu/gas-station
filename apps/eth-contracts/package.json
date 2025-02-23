@@ -2,6 +2,8 @@
   "name": "eth-contracts",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/hardhat-upgrades": "^3.9.0",
+    "@nomiclabs/hardhat-solhint": "^4.0.1",
     "hardhat": "^2.22.18"
   },
   "dependencies": {
