@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
-import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {Vault} from "./Vault.sol";
-import {IVault} from "./interfaces/IVault.sol";
-import {TokenWhitelist} from "./TokenWhitelist.sol";
-import {Errors} from "./libraries/Errors.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import { ProxyAdmin } from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import { Vault } from "./Vault.sol";
+import { IVault } from "./interfaces/IVault.sol";
+import { TokenWhitelist } from "./TokenWhitelist.sol";
+import { Errors } from "./libraries/Errors.sol";
 
-contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
+contract VaultFactory is
+    Initializable,
+    OwnableUpgradeable,
+    ReentrancyGuardUpgradeable,
+    PausableUpgradeable
+{
     using EnumerableSet for EnumerableSet.AddressSet;
 
     /// @dev ProxyAdmin for managing vault proxies
@@ -26,10 +31,10 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
     TokenWhitelist public tokenWhitelist;
 
     /// @dev Set to store all vault addresses
-    EnumerableSet.AddressSet private allVaults;
+    EnumerableSet.AddressSet private _allVaults;
 
     /// @dev Mapping of owner to their vaults
-    mapping(address => EnumerableSet.AddressSet) private ownerVaults;
+    mapping(address => EnumerableSet.AddressSet) private _ownerVaults;
 
     /// Events
     // @dev Vault created event
@@ -54,6 +59,7 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
     function initialize(address _vaultImplementation, address _tokenWhitelist) public initializer {
         __Ownable_init(msg.sender);
         __ReentrancyGuard_init();
+        __Pausable_init();
 
         if (_vaultImplementation == address(0)) revert Errors.InvalidAddress();
         if (_tokenWhitelist == address(0)) revert Errors.InvalidAddress();
@@ -67,29 +73,38 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
 
     /**
      * @dev Create a new vault as a TransparentUpgradeableProxy
+     * @param vaultOwner Address that will own the vault
      * @return vault Address of the new vault
      */
-    function createVault() external nonReentrant whenNotPaused onlyOwner returns (address vault) {
+    function createVault(
+        address vaultOwner
+    ) external nonReentrant whenNotPaused onlyOwner returns (address vault) {
         if (vaultImplementation == address(0)) revert Errors.InvalidVault();
         if (address(tokenWhitelist) == address(0)) revert Errors.TokenNotWhitelisted();
+        if (vaultOwner == address(0)) revert Errors.InvalidAddress();
 
-        bytes memory initData = abi.encodeWithSelector(Vault.initialize.selector, msg.sender);
+        // Initialize vault with owner and configuration
+        bytes memory initData = abi.encodeWithSelector(
+            Vault.initialize.selector,
+            vaultOwner,
+            address(tokenWhitelist)
+        );
 
-        TransparentUpgradeableProxy proxy =
-            new TransparentUpgradeableProxy(vaultImplementation, address(proxyAdmin), initData);
+        TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
+            vaultImplementation,
+            address(proxyAdmin),
+            initData
+        );
 
         vault = address(proxy);
 
         if (vault == address(0)) revert Errors.ProxyCreationFailed();
 
         // Record the new vault
-        if (!allVaults.add(vault)) revert Errors.ProxyCreationFailed();
-        if (!ownerVaults[msg.sender].add(vault)) revert Errors.ProxyCreationFailed();
+        if (!_allVaults.add(vault)) revert Errors.ProxyCreationFailed();
+        if (!_ownerVaults[vaultOwner].add(vault)) revert Errors.ProxyCreationFailed();
 
-        // Link the token whitelist to the new vault
-        IVault(payable(vault)).setTokenWhitelist(address(tokenWhitelist));
-
-        emit VaultCreated(msg.sender, vault);
+        emit VaultCreated(vaultOwner, vault);
     }
 
     /**
@@ -118,7 +133,7 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
      * @return Number of vaults
      */
     function getVaultCountByOwner(address vaultOwner) external view returns (uint256) {
-        return ownerVaults[vaultOwner].length();
+        return _ownerVaults[vaultOwner].length();
     }
 
     /**
@@ -127,9 +142,12 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
      * @param index Index of the vault in the owner's vault list
      * @return Address of the vault
      */
-    function getVaultByOwnerAndIndex(address vaultOwner, uint256 index) external view returns (address) {
-        if (index >= ownerVaults[vaultOwner].length()) revert Errors.InvalidLimits();
-        return ownerVaults[vaultOwner].at(index);
+    function getVaultByOwnerAndIndex(
+        address vaultOwner,
+        uint256 index
+    ) external view returns (address) {
+        if (index >= _ownerVaults[vaultOwner].length()) revert Errors.InvalidLimits();
+        return _ownerVaults[vaultOwner].at(index);
     }
 
     /**
@@ -138,9 +156,9 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
      * @return Address of the last vault, address(0) if no vaults exist
      */
     function getLastVaultByOwner(address vaultOwner) external view returns (address) {
-        uint256 length = ownerVaults[vaultOwner].length();
+        uint256 length = _ownerVaults[vaultOwner].length();
         if (length == 0) return address(0);
-        return ownerVaults[vaultOwner].at(length - 1);
+        return _ownerVaults[vaultOwner].at(length - 1);
     }
 
     /**
@@ -148,10 +166,10 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
      * @return Array of all vault addresses
      */
     function getAllVaults() external view returns (address[] memory) {
-        uint256 length = allVaults.length();
+        uint256 length = _allVaults.length();
         address[] memory vaults = new address[](length);
         for (uint256 i = 0; i < length; i++) {
-            vaults[i] = allVaults.at(i);
+            vaults[i] = _allVaults.at(i);
         }
         return vaults;
     }
@@ -162,7 +180,7 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
      * @return bool True if the address is a valid vault
      */
     function isVault(address vault) external view returns (bool) {
-        return allVaults.contains(vault);
+        return _allVaults.contains(vault);
     }
 
     /**
@@ -170,6 +188,6 @@ contract VaultFactory is Initializable, OwnableUpgradeable, ReentrancyGuardUpgra
      * @return Number of vaults
      */
     function getVaultCount() external view returns (uint256) {
-        return allVaults.length();
+        return _allVaults.length();
     }
 }
