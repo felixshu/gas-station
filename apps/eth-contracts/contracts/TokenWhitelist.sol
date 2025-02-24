@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {Errors} from "./libraries/Errors.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import { Errors } from "./libraries/Errors.sol";
 
 contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable {
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    EnumerableSet.AddressSet private whitelistedTokens;
+    EnumerableSet.AddressSet private _whitelistedTokens;
 
     // @dev Version of the contract
     uint256 public constant VERSION = 1;
@@ -45,8 +45,8 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
      */
     function addToken(address token) external onlyOwner whenNotPaused {
         if (token == address(0)) revert Errors.InvalidAddress();
-        if (whitelistedTokens.contains(token)) revert Errors.TokenNotSupported();
-        if (!whitelistedTokens.add(token)) revert Errors.TokenAdditionFailed();
+        if (_whitelistedTokens.contains(token)) revert Errors.TokenNotSupported();
+        if (!_whitelistedTokens.add(token)) revert Errors.TokenAdditionFailed();
         emit TokenAdded(token);
     }
 
@@ -56,8 +56,8 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
      * @param token Address of the token to remove.
      */
     function removeToken(address token) external onlyOwner whenNotPaused {
-        if (!whitelistedTokens.contains(token)) revert Errors.TokenNotWhitelisted();
-        if (!whitelistedTokens.remove(token)) revert Errors.TokenRemovalFailed();
+        if (!_whitelistedTokens.contains(token)) revert Errors.TokenNotWhitelisted();
+        if (!_whitelistedTokens.remove(token)) revert Errors.TokenRemovalFailed();
         emit TokenRemoved(token);
     }
 
@@ -66,7 +66,7 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
      * @return Number of whitelisted tokens
      */
     function getWhitelistedTokenCount() external view returns (uint256) {
-        return whitelistedTokens.length();
+        return _whitelistedTokens.length();
     }
 
     /**
@@ -75,8 +75,8 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
      * @return Address of the token
      */
     function getWhitelistedTokenAt(uint256 index) external view returns (address) {
-        if (index >= whitelistedTokens.length()) revert Errors.InvalidLimits();
-        return whitelistedTokens.at(index);
+        if (index >= _whitelistedTokens.length()) revert Errors.InvalidLimits();
+        return _whitelistedTokens.at(index);
     }
 
     /**
@@ -85,8 +85,11 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
      * @param limit Maximum number of tokens to return
      * @return Array of token addresses for the requested page
      */
-    function getWhitelistedTokensPage(uint256 offset, uint256 limit) external view returns (address[] memory) {
-        uint256 total = whitelistedTokens.length();
+    function getWhitelistedTokensPage(
+        uint256 offset,
+        uint256 limit
+    ) external view returns (address[] memory) {
+        uint256 total = _whitelistedTokens.length();
         if (offset >= total) revert Errors.InvalidLimits();
 
         uint256 end = (offset + limit > total) ? total : offset + limit;
@@ -94,7 +97,7 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
 
         address[] memory page = new address[](size);
         for (uint256 i = 0; i < size; i++) {
-            page[i] = whitelistedTokens.at(offset + i);
+            page[i] = _whitelistedTokens.at(offset + i);
         }
         return page;
     }
@@ -105,7 +108,7 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
      * @return True if the token is whitelisted, false otherwise.
      */
     function isTokenWhitelisted(address token) external view returns (bool) {
-        return whitelistedTokens.contains(token);
+        return _whitelistedTokens.contains(token);
     }
 
     // ======================================================

@@ -8,14 +8,55 @@
 		"func-visibility": [
 			"error",
 			{
-				"ignoreConstructors": true
+				"ignoreConstructors": true,
+				"ignoreOverridden": false
 			}
 		],
-		"not-rely-on-time": "off",
+		"state-visibility": "error",
+		"visibility-modifier-order": "error",
+		"avoid-low-level-calls": "warn",
+		"avoid-tx-origin": "error",
+		"check-send-result": "error",
+		"multiple-sends": "error",
+		"no-inline-assembly": "warn",
+		"reentrancy": "error",
 		"no-empty-blocks": "off",
+		"no-unused-vars": "error",
+		"function-max-lines": [
+			"warn",
+			50
+		],
+		"code-complexity": [
+			"warn",
+			7
+		],
+		"max-states-count": [
+			"warn",
+			20
+		],
+		"const-name-snakecase": "error",
+		"func-name-mixedcase": "error",
+		"modifier-name-mixedcase": "error",
+		"private-vars-leading-underscore": "error",
+		"use-forbidden-name": "error",
+		"var-name-mixedcase": "error",
+		"imports-on-top": "error",
+		"ordering": "warn",
+		"no-global-import": "error",
 		"max-line-length": [
 			"warn",
-			120
-		]
+			120,
+			2,
+			{
+				"ignoreImports": true
+			}
+		],
+		"quotes": [
+			"error",
+			"double"
+		],
+		"payable-fallback": "error",
+		"no-complex-fallback": "off",
+		"not-rely-on-time": "off"
 	}
 }

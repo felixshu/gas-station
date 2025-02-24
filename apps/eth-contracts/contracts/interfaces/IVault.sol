@@ -17,6 +17,9 @@ interface IVault {
 
     // Whitelist events
     event WhitelistSet(address indexed whitelist);
+    event GasStationSet(address indexed gasStation);
 
     function setTokenWhitelist(address _whitelist) external;
+    function setGasStation(address _gasStation) external;
+    function initialize(address owner_, address whitelist_) external;
 }

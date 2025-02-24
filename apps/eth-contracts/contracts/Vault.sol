@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {SafeERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {TokenWhitelist} from "./TokenWhitelist.sol";
-import {Errors} from "./libraries/Errors.sol";
-import {IVault} from "./interfaces/IVault.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { TokenWhitelist } from "./TokenWhitelist.sol";
+import { Errors } from "./libraries/Errors.sol";
+import { IVault } from "./interfaces/IVault.sol";
 
 contract Vault is
     Initializable,
@@ -38,10 +38,17 @@ contract Vault is
 
     /**
      * @dev Initializes the contract setting the deployer as the initial owner.
+     * @param owner_ The address that will own the vault
+     * @param whitelist_ The address of the token whitelist contract
      */
-    function initialize() public initializer {
-        __Ownable_init(msg.sender);
+    function initialize(address owner_, address whitelist_) public initializer {
+        __Ownable_init(owner_);
         __Pausable_init();
+        gasStation = owner_; // Set GasStation as both owner and operator
+
+        if (whitelist_ == address(0)) revert Errors.InvalidAddress();
+        tokenWhitelist = TokenWhitelist(whitelist_);
+        emit WhitelistSet(whitelist_);
     }
 
     /**
@@ -109,11 +116,12 @@ contract Vault is
     function withdrawEth(uint256 amount, address to) external nonReentrant whenNotPaused onlyOwner {
         address recipient = to == address(0) ? msg.sender : to;
         // Only owner can withdraw to a different address
-        if (to != address(0) && to != msg.sender && msg.sender != owner()) revert Errors.InvalidAddress();
+        if (to != address(0) && to != msg.sender && msg.sender != owner())
+            revert Errors.InvalidAddress();
         if (balances[msg.sender][address(0)] < amount) revert Errors.InsufficientBalance();
         balances[msg.sender][address(0)] -= amount;
         totalDeposits[address(0)] -= amount;
-        (bool success,) = recipient.call{value: amount}("");
+        (bool success, ) = recipient.call{ value: amount }("");
         if (!success) revert Errors.EthTransferFailed();
         emit Withdrawn(msg.sender, address(0), amount);
     }
@@ -125,10 +133,15 @@ contract Vault is
      * @param amount The token amount to withdraw.
      * @param to The address to receive the tokens. If zero address, sends to msg.sender.
      */
-    function withdrawToken(address token, uint256 amount, address to) external nonReentrant whenNotPaused onlyOwner {
+    function withdrawToken(
+        address token,
+        uint256 amount,
+        address to
+    ) external nonReentrant whenNotPaused onlyOwner {
         address recipient = to == address(0) ? msg.sender : to;
         // Only owner can withdraw to a different address
-        if (to != address(0) && to != msg.sender && msg.sender != owner()) revert Errors.InvalidAddress();
+        if (to != address(0) && to != msg.sender && msg.sender != owner())
+            revert Errors.InvalidAddress();
         if (balances[msg.sender][token] < amount) revert Errors.InsufficientBalance();
         if (!_isTokenWhitelisted(token)) revert Errors.TokenNotWhitelisted();
         balances[msg.sender][token] -= amount;
@@ -162,7 +175,7 @@ contract Vault is
         if (msg.sender != address(gasStation)) revert Errors.UnauthorizedAccess();
         if (address(this).balance < amount) revert Errors.InsufficientBalance();
 
-        (bool success,) = destination.call{value: amount}("");
+        (bool success, ) = destination.call{ value: amount }("");
         if (!success) revert Errors.EthTransferFailed();
     }
 
@@ -198,12 +211,11 @@ contract Vault is
      * @param amount The amount to recover.
      * @param to The address that will receive the recovered tokens.
      */
-    function emergencyRecoverToken(address token, uint256 amount, address to)
-        external
-        nonReentrant
-        whenPaused
-        onlyOwner
-    {
+    function emergencyRecoverToken(
+        address token,
+        uint256 amount,
+        address to
+    ) external nonReentrant whenPaused onlyOwner {
         if (!paused()) revert Errors.NotInEmergencyMode();
         uint256 contractBalance = IERC20(token).balanceOf(address(this));
         uint256 allocated = totalDeposits[token];
@@ -220,12 +232,15 @@ contract Vault is
      * @param amount The amount of ETH to recover.
      * @param to The address that will receive the recovered ETH.
      */
-    function emergencyRecoverEth(uint256 amount, address to) external nonReentrant whenPaused onlyOwner {
+    function emergencyRecoverEth(
+        uint256 amount,
+        address to
+    ) external nonReentrant whenPaused onlyOwner {
         if (!paused()) revert Errors.NotInEmergencyMode();
         uint256 contractBalance = address(this).balance;
         uint256 allocated = totalDeposits[address(0)];
         if (amount > contractBalance - allocated) revert Errors.InsufficientBalance();
-        (bool success,) = to.call{value: amount}("");
+        (bool success, ) = to.call{ value: amount }("");
         if (!success) revert Errors.EthTransferFailed();
         emit EmergencyRecovery(address(0), amount, to);
     }

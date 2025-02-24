@@ -13,7 +13,7 @@ interface IGasStation {
         address indexed depositor,
         address indexed destination,
         address indexed token,
-        uint256 tokenAmount,
+        uint256 amount,
         uint256 ethAmount
     );
     event LimitsUpdated(uint256 minAmount, uint256 maxAmount);
@@ -41,6 +41,8 @@ interface IGasStation {
     function removePaymentToken(address token) external;
     function getSupportedTokens() external view returns (address[] memory);
     function calculateEthAmount(address token, uint256 amount) external view returns (uint256);
+
+    function exchange(address token, uint256 amount, address destination) external;
 
     function exchangeWithPermit(
         address token,
