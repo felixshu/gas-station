@@ -1,12 +1,14 @@
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
+import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+import { parseEther } from "ethers";
 import { GasOptimizer } from "../typechain-types";
 
 describe("GasOptimizer", function () {
   let gasOptimizer: GasOptimizer;
-  let owner: any;
-  let user1: any;
-  let user2: any;
+  let owner: HardhatEthersSigner;
+  let user1: HardhatEthersSigner;
+  let user2: HardhatEthersSigner;
   let ownerAddress: string;
   let user1Address: string;
   let user2Address: string;
@@ -18,13 +20,17 @@ describe("GasOptimizer", function () {
   const maxPriorityFeePerGasLimit = BigInt(100 * 10 ** 9); // 100 gwei
 
   beforeEach(async function () {
-    [owner, user1, user2] = await ethers.getSigners();
+    const signers = await ethers.getSigners();
+    [owner, user1, user2] = signers;
     ownerAddress = await owner.getAddress();
     user1Address = await user1.getAddress();
     user2Address = await user2.getAddress();
 
-    const GasOptimizerFactory = await ethers.getContractFactory("GasOptimizer");
-    gasOptimizer = (await upgrades.deployProxy(
+    // @ts-ignore - Ignore all type checking for contract deployment
+    const GasOptimizerFactory = await ethers.getContractFactory("GasOptimizer", owner);
+
+    // @ts-ignore - Ignore all type checking for contract deployment
+    gasOptimizer = await upgrades.deployProxy(
       GasOptimizerFactory,
       [
         defaultMaxPriorityFeePerGas,
@@ -33,12 +39,12 @@ describe("GasOptimizer", function () {
         maxPriorityFeePerGasLimit,
       ],
       { initializer: "initialize" }
-    )) as unknown as GasOptimizer;
+    );
 
     // Fund the gas optimizer with some ETH for tests
     await owner.sendTransaction({
       to: await gasOptimizer.getAddress(),
-      value: ethers.parseEther("10"),
+      value: parseEther("10"),
     });
   });
 
@@ -117,7 +123,7 @@ describe("GasOptimizer", function () {
   describe("EIP-1559 Transactions", function () {
     it("should send ETH using EIP-1559 parameters", async function () {
       const initialBalance = await ethers.provider.getBalance(user2Address);
-      const amount = ethers.parseEther("1");
+      const amount = parseEther("1");
 
       await gasOptimizer.sendEthEIP1559(
         user2Address,
@@ -132,7 +138,7 @@ describe("GasOptimizer", function () {
 
     it("should use default gas parameters when zeros are provided", async function () {
       const initialBalance = await ethers.provider.getBalance(user2Address);
-      const amount = ethers.parseEther("1");
+      const amount = parseEther("1");
 
       await gasOptimizer.sendEthEIP1559(user2Address, amount, 0, 0);
 
@@ -145,7 +151,7 @@ describe("GasOptimizer", function () {
       await expect(
         gasOptimizer.sendEthEIP1559(
           zeroAddress,
-          ethers.parseEther("1"),
+          parseEther("1"),
           BigInt(2 * 10 ** 9), // 2 gwei
           BigInt(50 * 10 ** 9) // 50 gwei
         )
@@ -223,7 +229,7 @@ describe("GasOptimizer", function () {
       await expect(
         gasOptimizer.sendEthEIP1559(
           user2Address,
-          ethers.parseEther("1"),
+          parseEther("1"),
           BigInt(2 * 10 ** 9), // 2 gwei
           BigInt(50 * 10 ** 9) // 50 gwei
         )
@@ -235,7 +241,7 @@ describe("GasOptimizer", function () {
       // Should work after unpausing
       await gasOptimizer.sendEthEIP1559(
         user2Address,
-        ethers.parseEther("1"),
+        parseEther("1"),
         BigInt(2 * 10 ** 9), // 2 gwei
         BigInt(50 * 10 ** 9) // 50 gwei
       );
