@@ -43,6 +43,7 @@ contract Vault is
      */
     function initialize(address owner_, address whitelist_) public initializer {
         __Ownable_init(owner_);
+        __ReentrancyGuard_init();
         __Pausable_init();
         gasStation = owner_; // Set GasStation as both owner and operator
 
