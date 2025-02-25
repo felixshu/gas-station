@@ -23,6 +23,8 @@ library Errors {
     error TokenAdditionFailed();
     //@dev Token removal failed
     error TokenRemovalFailed();
+    //@dev Invalid token contract (not ERC20 compliant)
+    error InvalidTokenContract();
 
     // Price feed related errors
     //@dev Invalid ETH price

@@ -6,6 +6,8 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import { Address } from "@openzeppelin/contracts/utils/Address.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { Errors } from "./libraries/Errors.sol";
 
 contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable {
@@ -46,6 +48,23 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
     function addToken(address token) external onlyOwner whenNotPaused {
         if (token == address(0)) revert Errors.InvalidAddress();
         if (_whitelistedTokens.contains(token)) revert Errors.TokenNotSupported();
+
+        // Verify the token address is a contract by checking if it has code
+        uint256 codeSize;
+        assembly {
+            codeSize := extcodesize(token)
+        }
+        if (codeSize == 0) revert Errors.InvalidTokenContract();
+
+        // Verify the token implements the ERC20 interface
+        // We'll try to call totalSupply() which is a view function that all ERC20 tokens must implement
+        try IERC20(token).totalSupply() {
+            // If the call succeeds, the token likely implements ERC20
+        } catch {
+            // If the call fails, the token doesn't implement ERC20 correctly
+            revert Errors.InvalidTokenContract();
+        }
+
         if (!_whitelistedTokens.add(token)) revert Errors.TokenAdditionFailed();
         emit TokenAdded(token);
     }
