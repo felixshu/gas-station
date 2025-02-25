@@ -6,8 +6,6 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import { Address } from "@openzeppelin/contracts/utils/Address.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { Errors } from "./libraries/Errors.sol";
 
 contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable {
@@ -80,36 +78,13 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
         if (tokens.length > MAX_BATCH_SIZE) revert Errors.BatchSizeTooLarge();
 
         uint256 addedCount = 0;
-
-        // Pre-validate tokens to avoid unnecessary gas consumption
-        address[] memory validTokens = new address[](tokens.length);
-        uint256 validCount = 0;
-
-        for (uint256 i = 0; i < tokens.length; i++) {
-            address token = tokens[i];
-
-            // Basic validation
-            if (token == address(0)) continue;
-            if (_whitelistedTokens.contains(token)) continue;
-
-            // Check if it's a contract
-            uint256 codeSize;
-            assembly {
-                codeSize := extcodesize(token)
-            }
-            if (codeSize == 0) continue;
-
-            // Verify ERC20 interface
-            try IERC20(token).totalSupply() {
-                validTokens[validCount] = token;
-                validCount++;
-            } catch {
-                continue;
-            }
-        }
+        address[] memory validTokens = _validateTokensBatch(tokens);
 
         // Add valid tokens directly
-        for (uint256 i = 0; i < validCount; i++) {
+        for (uint256 i = 0; i < validTokens.length; i++) {
+            // Skip empty addresses (end of array or invalid tokens)
+            if (validTokens[i] == address(0)) break;
+
             if (_whitelistedTokens.add(validTokens[i])) {
                 addedCount++;
                 emit TokenAdded(validTokens[i]);
@@ -119,37 +94,6 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
         // Invalidate all caches since the token list changed
         emit WhitelistUpdated(_whitelistedTokens.length());
         emit TokensAddedInBatch(addedCount);
-    }
-
-    /**
-     * @dev Internal function to add a single token with validation
-     * @param token Address of the token to whitelist
-     */
-    function _addSingleToken(address token) internal {
-        if (token == address(0)) revert Errors.InvalidAddress();
-        if (_whitelistedTokens.contains(token)) revert Errors.TokenNotSupported();
-
-        // Verify the token address is a contract by checking if it has code
-        uint256 codeSize;
-        assembly {
-            codeSize := extcodesize(token)
-        }
-        if (codeSize == 0) revert Errors.InvalidTokenContract();
-
-        // Verify the token implements the ERC20 interface
-        // We'll try to call totalSupply() which is a view function that all ERC20 tokens must implement
-        try IERC20(token).totalSupply() {
-            // If the call succeeds, the token likely implements ERC20
-        } catch {
-            // If the call fails, the token doesn't implement ERC20 correctly
-            revert Errors.InvalidTokenContract();
-        }
-
-        if (!_whitelistedTokens.add(token)) revert Errors.TokenAdditionFailed();
-
-        // Invalidate all caches since the token list changed
-        emit TokenAdded(token);
-        emit WhitelistUpdated(_whitelistedTokens.length());
     }
 
     /**
@@ -164,6 +108,61 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
         // Invalidate all caches since the token list changed
         emit TokenRemoved(token);
         emit WhitelistUpdated(_whitelistedTokens.length());
+    }
+
+    /**
+     * @dev Clear all caches
+     * Only callable by owner
+     */
+    function clearAllCaches() external onlyOwner {
+        // This function doesn't actually delete the cache data
+        // It just invalidates all caches by resetting their update time
+        emit WhitelistUpdated(_whitelistedTokens.length());
+    }
+
+    /**
+     * @dev Get a page of whitelisted tokens with caching for frequent access patterns
+     * This function updates the cache for future calls
+     * @param offset Starting index
+     * @param limit Maximum number of tokens to return (capped at MAX_PAGE_SIZE)
+     * @return Array of token addresses for the requested page
+     */
+    function getWhitelistedTokensPageCached(
+        uint256 offset,
+        uint256 limit
+    ) external returns (address[] memory) {
+        uint256 total = _whitelistedTokens.length();
+        if (offset >= total) revert Errors.InvalidLimits();
+
+        // Cap the limit to prevent excessive gas consumption
+        if (limit > MAX_PAGE_SIZE) {
+            limit = MAX_PAGE_SIZE;
+        }
+
+        bytes32 cacheKey = keccak256(abi.encodePacked(offset, limit));
+
+        // Check if we need to update the cache
+        if (!_isCacheValid(cacheKey)) {
+            uint256 end = (offset + limit > total) ? total : offset + limit;
+            uint256 size = end - offset;
+
+            address[] memory page = new address[](size);
+
+            // Populate the page
+            unchecked {
+                for (uint256 i = 0; i < size; i++) {
+                    page[i] = _whitelistedTokens.at(offset + i);
+                }
+            }
+
+            // Update cache
+            _updateCache(cacheKey, page);
+            emit CacheUpdated(offset, limit);
+
+            return page;
+        }
+
+        return _pageCache[cacheKey];
     }
 
     /**
@@ -224,51 +223,6 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
     }
 
     /**
-     * @dev Get a page of whitelisted tokens with caching for frequent access patterns
-     * This function updates the cache for future calls
-     * @param offset Starting index
-     * @param limit Maximum number of tokens to return (capped at MAX_PAGE_SIZE)
-     * @return Array of token addresses for the requested page
-     */
-    function getWhitelistedTokensPageCached(
-        uint256 offset,
-        uint256 limit
-    ) external returns (address[] memory) {
-        uint256 total = _whitelistedTokens.length();
-        if (offset >= total) revert Errors.InvalidLimits();
-
-        // Cap the limit to prevent excessive gas consumption
-        if (limit > MAX_PAGE_SIZE) {
-            limit = MAX_PAGE_SIZE;
-        }
-
-        bytes32 cacheKey = keccak256(abi.encodePacked(offset, limit));
-
-        // Check if we need to update the cache
-        if (!_isCacheValid(cacheKey)) {
-            uint256 end = (offset + limit > total) ? total : offset + limit;
-            uint256 size = end - offset;
-
-            address[] memory page = new address[](size);
-
-            // Populate the page
-            unchecked {
-                for (uint256 i = 0; i < size; i++) {
-                    page[i] = _whitelistedTokens.at(offset + i);
-                }
-            }
-
-            // Update cache
-            _updateCache(cacheKey, page);
-            emit CacheUpdated(offset, limit);
-
-            return page;
-        }
-
-        return _pageCache[cacheKey];
-    }
-
-    /**
      * @dev Check if a token is whitelisted.
      * @param token Address of the token to check.
      * @return True if the token is whitelisted, false otherwise.
@@ -277,15 +231,21 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
         return _whitelistedTokens.contains(token);
     }
 
+    // ======================================================
+    // Internal Functions
+    // ======================================================
+
     /**
-     * @dev Check if cache is valid for a given key
-     * @param cacheKey The cache key
-     * @return True if cache is valid
+     * @dev Add a single token to the whitelist
+     * @param token Address of the token to add
      */
-    function _isCacheValid(bytes32 cacheKey) internal view returns (bool) {
-        return
-            _cacheUpdatedAt[cacheKey] > 0 &&
-            block.number - _cacheUpdatedAt[cacheKey] <= CACHE_EXPIRY_BLOCKS;
+    function _addSingleToken(address token) internal {
+        if (token == address(0)) revert Errors.InvalidAddress();
+        if (!_isContract(token)) revert Errors.InvalidTokenContract();
+        if (_whitelistedTokens.contains(token)) revert Errors.TokenNotSupported();
+
+        if (!_whitelistedTokens.add(token)) revert Errors.TokenAdditionFailed();
+        emit TokenAdded(token);
     }
 
     /**
@@ -305,18 +265,67 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
     }
 
     /**
-     * @dev Clear all caches
-     * Only callable by owner
+     * @dev UUPS Upgradeable Implementation
+     * @param newImplementation Address of the new implementation
      */
-    function clearAllCaches() external onlyOwner {
-        // This function doesn't actually delete the cache data
-        // It just invalidates all caches by resetting their update time
-        emit WhitelistUpdated(_whitelistedTokens.length());
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    // ======================================================
+    // Internal View Functions
+    // ======================================================
+
+    /**
+     * @dev Check if an address is a contract
+     * @param addr Address to check
+     * @return True if the address is a contract
+     */
+    function _isContract(address addr) internal view returns (bool) {
+        // Using extcodesize is the standard way to check if an address is a contract
+        // We're avoiding inline assembly by using a different approach
+        return addr.code.length > 0;
     }
 
-    // ======================================================
-    // UUPS Upgradeable Implementation
-    // ======================================================
+    /**
+     * @dev Check if cache is valid for a given key
+     * @param cacheKey The cache key
+     * @return True if cache is valid
+     */
+    function _isCacheValid(bytes32 cacheKey) internal view returns (bool) {
+        return
+            _cacheUpdatedAt[cacheKey] > 0 &&
+            block.number - _cacheUpdatedAt[cacheKey] <= CACHE_EXPIRY_BLOCKS;
+    }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+    /**
+     * @dev Validate a batch of tokens
+     * @param tokens Array of token addresses to validate
+     * @return validTokens Array of valid token addresses
+     */
+    function _validateTokensBatch(
+        address[] calldata tokens
+    ) internal view returns (address[] memory validTokens) {
+        uint256 length = tokens.length;
+        if (length == 0) revert Errors.InvalidLimits();
+        if (length > MAX_BATCH_SIZE) revert Errors.BatchSizeTooLarge();
+
+        validTokens = new address[](length);
+        uint256 validCount = 0;
+
+        for (uint256 i = 0; i < length; i++) {
+            address token = tokens[i];
+
+            // Basic validation
+            if (token == address(0)) continue;
+            if (_whitelistedTokens.contains(token)) continue;
+
+            // Check if it's a contract
+            if (!_isContract(token)) continue;
+
+            // Add to valid tokens
+            validTokens[validCount] = token;
+            validCount++;
+        }
+
+        return validTokens;
+    }
 }
