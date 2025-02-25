@@ -13,6 +13,8 @@ library Errors {
     error InvalidLimits();
     //@dev Unauthorized access
     error UnauthorizedAccess();
+    //@dev Batch size too large
+    error BatchSizeTooLarge();
 
     // Token related errors
     //@dev Token not supported
