@@ -13,6 +13,8 @@ library Errors {
     error InvalidLimits();
     //@dev Unauthorized access
     error UnauthorizedAccess();
+    //@dev Batch size too large
+    error BatchSizeTooLarge();
 
     // Token related errors
     //@dev Token not supported
@@ -23,6 +25,8 @@ library Errors {
     error TokenAdditionFailed();
     //@dev Token removal failed
     error TokenRemovalFailed();
+    //@dev Invalid token contract (not ERC20 compliant)
+    error InvalidTokenContract();
 
     // Price feed related errors
     //@dev Invalid ETH price
