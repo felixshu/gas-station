@@ -9,7 +9,9 @@ import type {
   GasStation,
   VaultFactory,
   Vault,
+  MockPriceFeed,
 } from "../typechain-types";
+import { deployVaultFactoryWithLibraries } from "./helpers/fixtures";
 
 describe("TokenWhitelist", function () {
   let tokenWhitelist: TokenWhitelist & Contract;
@@ -260,10 +262,10 @@ describe("TokenWhitelist", function () {
 
   // Category 6: Integration Tests
   describe("Integration", function () {
-    let gasStation: GasStation & Contract;
-    let vaultFactory: VaultFactory & Contract;
-    let mockPriceFeed: any; // Using any type to avoid type issues
     let vaultImplementation: Vault & Contract;
+    let vaultFactory: VaultFactory & Contract;
+    let gasStation: GasStation & Contract;
+    let mockPriceFeed: any; // Using any type to avoid type issues
 
     beforeEach(async function () {
       // Deploy mock price feed
@@ -276,16 +278,12 @@ describe("TokenWhitelist", function () {
       vaultImplementation = (await VaultFactory.deploy()) as Vault & Contract;
       await vaultImplementation.waitForDeployment();
 
-      // Deploy VaultFactory with TokenWhitelist
-      const VaultFactoryFactory = await ethers.getContractFactory("VaultFactory");
-      vaultFactory = (await upgrades.deployProxy(
-        VaultFactoryFactory,
-        [await vaultImplementation.getAddress(), await tokenWhitelist.getAddress()],
-        {
-          initializer: "initialize",
-        }
-      )) as VaultFactory & Contract;
-      await vaultFactory.waitForDeployment();
+      // Deploy VaultFactory with TokenWhitelist using our helper function
+      const result = await deployVaultFactoryWithLibraries(
+        owner,
+        await tokenWhitelist.getAddress()
+      );
+      vaultFactory = result.vaultFactory as VaultFactory & Contract;
 
       // Deploy GasStation
       const GasStationFactory = await ethers.getContractFactory("GasStation");

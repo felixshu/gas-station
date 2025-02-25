@@ -11,6 +11,7 @@ import type {
   MockPriceFeed,
   TokenWhitelist,
 } from "../typechain-types";
+import { deployVaultFactoryWithLibraries } from "./helpers/fixtures";
 
 describe("GasStation", function () {
   let gasStation: GasStation & Contract;
@@ -40,7 +41,7 @@ describe("GasStation", function () {
     mockPriceFeed = (await MockPriceFeedFactory.deploy()) as MockPriceFeed & Contract;
     await mockPriceFeed.setPrice(ETH_PRICE);
 
-    const VaultFactoryFactory = await ethers.getContractFactory("VaultFactory");
+    // Deploy Vault implementation
     const VaultFactory = await ethers.getContractFactory("Vault");
     const vaultImplementation = (await VaultFactory.deploy()) as Vault & Contract;
     await vaultImplementation.waitForDeployment();
@@ -54,11 +55,9 @@ describe("GasStation", function () {
 
     await tokenWhitelist.addToken(await mockUSDC.getAddress());
 
-    vaultFactory = (await upgrades.deployProxy(VaultFactoryFactory, [
-      await vaultImplementation.getAddress(),
-      await tokenWhitelist.getAddress(),
-    ])) as VaultFactory & Contract;
-    await vaultFactory.waitForDeployment();
+    // Deploy VaultFactory with TokenWhitelist using our helper function
+    const result = await deployVaultFactoryWithLibraries(owner, await tokenWhitelist.getAddress());
+    vaultFactory = result.vaultFactory as VaultFactory & Contract;
 
     const GasStationFactory = await ethers.getContractFactory("GasStation", owner);
     gasStation = (await upgrades.deployProxy(
