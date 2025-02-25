@@ -2,7 +2,6 @@
 pragma solidity ^0.8.28;
 
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import { Errors } from "./Errors.sol";
 import { Vault } from "../Vault.sol";
 
 /**

@@ -10,6 +10,7 @@ import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/Saf
 import { TokenWhitelist } from "./TokenWhitelist.sol";
 import { Errors } from "./libraries/Errors.sol";
 import { IVault } from "./interfaces/IVault.sol";
+import { IGasOptimizer } from "./interfaces/IGasOptimizer.sol";
 
 contract Vault is
     Initializable,
@@ -30,6 +31,12 @@ contract Vault is
     mapping(address => mapping(address => uint256)) public balances;
     // @dev Tracks total user deposits per token (including ETH at address(0)).
     mapping(address => uint256) public totalDeposits;
+
+    // Gas optimizer instance
+    IGasOptimizer public gasOptimizer;
+
+    // Flag to use EIP-1559 transactions
+    bool public useEIP1559;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -168,16 +175,71 @@ contract Vault is
     }
 
     /**
-     * @dev Send ETH to a destination (only callable by GasStation)
-     * @param destination Address to receive ETH
-     * @param amount Amount of ETH to send
+     * @dev Set the gas optimizer address.
+     * @param _gasOptimizer The address of the gas optimizer contract
+     */
+    function setGasOptimizer(address _gasOptimizer) external onlyOwner {
+        if (_gasOptimizer == address(0)) revert Errors.InvalidAddress();
+        gasOptimizer = IGasOptimizer(_gasOptimizer);
+        emit GasOptimizerSet(_gasOptimizer);
+    }
+
+    /**
+     * @dev Toggle the use of EIP-1559 transactions.
+     * @param _useEIP1559 Whether to use EIP-1559 transactions
+     */
+    function toggleEIP1559(bool _useEIP1559) external onlyOwner {
+        if (_useEIP1559 && address(gasOptimizer) == address(0)) revert Errors.InvalidAddress();
+        useEIP1559 = _useEIP1559;
+        emit EIP1559ToggleUpdated(_useEIP1559);
+    }
+
+    /**
+     * @dev Send ETH to a destination address using EIP-1559.
+     * @param destination The address to send ETH to
+     * @param amount The amount of ETH to send
+     * @param maxPriorityFeePerGas Max priority fee per gas (in wei)
+     * @param maxFeePerGas Max fee per gas (in wei)
+     */
+    function sendEthEIP1559(
+        address destination,
+        uint256 amount,
+        uint256 maxPriorityFeePerGas,
+        uint256 maxFeePerGas
+    ) external nonReentrant whenNotPaused {
+        if (msg.sender != address(gasStation)) revert Errors.UnauthorizedAccess();
+        if (address(this).balance < amount) revert Errors.InsufficientBalance();
+        if (address(gasOptimizer) == address(0)) revert Errors.InvalidAddress();
+
+        // Use the gas optimizer to send ETH with EIP-1559
+        bool success = gasOptimizer.sendEthEIP1559(
+            destination,
+            amount,
+            maxPriorityFeePerGas,
+            maxFeePerGas
+        );
+
+        if (!success) revert Errors.EthTransferFailed();
+    }
+
+    /**
+     * @dev Send ETH to a destination address.
+     * @param destination The address to send ETH to
+     * @param amount The amount of ETH to send
      */
     function sendEth(address destination, uint256 amount) external nonReentrant whenNotPaused {
         if (msg.sender != address(gasStation)) revert Errors.UnauthorizedAccess();
         if (address(this).balance < amount) revert Errors.InsufficientBalance();
 
-        (bool success, ) = destination.call{ value: amount }("");
-        if (!success) revert Errors.EthTransferFailed();
+        // If EIP-1559 is enabled and gas optimizer is set, use it
+        if (useEIP1559 && address(gasOptimizer) != address(0)) {
+            bool success = gasOptimizer.sendEthEIP1559(destination, amount, 0, 0);
+            if (!success) revert Errors.EthTransferFailed();
+        } else {
+            // Use regular ETH transfer
+            (bool success, ) = destination.call{ value: amount }("");
+            if (!success) revert Errors.EthTransferFailed();
+        }
     }
 
     // ==============================================================
@@ -251,4 +313,8 @@ contract Vault is
     //==============================================================
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    // Add new events
+    event GasOptimizerSet(address indexed gasOptimizer);
+    event EIP1559ToggleUpdated(bool useEIP1559);
 }

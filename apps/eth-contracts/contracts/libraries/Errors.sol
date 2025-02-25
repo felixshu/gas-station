@@ -15,6 +15,10 @@ library Errors {
     error UnauthorizedAccess();
     //@dev Batch size too large
     error BatchSizeTooLarge();
+    //@dev Invalid amount
+    error InvalidAmount();
+    //@dev Invalid parameters
+    error InvalidParameters();
 
     // Token related errors
     //@dev Token not supported
@@ -77,4 +81,14 @@ library Errors {
     error NotInEmergencyMode();
     //@dev Contract paused
     error ContractPaused();
+
+    // Gas optimization related errors
+    //@dev Gas price too low
+    error GasPriceTooLow();
+    //@dev Gas price too high
+    error GasPriceTooHigh();
+    //@dev EIP-1559 not supported
+    error EIP1559NotSupported();
+    //@dev Gas optimizer not set
+    error GasOptimizerNotSet();
 }

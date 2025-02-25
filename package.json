@@ -20,7 +20,7 @@
     "@swc/helpers": "~0.5.11",
     "@typechain/ethers-v6": "^0.5.1",
     "@typechain/hardhat": "^9.1.0",
-    "hardhat": "^2.22.18",
+    "hardhat": "^2.22.19",
     "nx": "20.4.6",
     "prettier": "^2.6.2",
     "prettier-plugin-solidity": "^1.4.2",

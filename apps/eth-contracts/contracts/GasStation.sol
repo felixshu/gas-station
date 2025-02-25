@@ -13,6 +13,7 @@ import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/I
 import { AggregatorV3Interface } from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import { Errors } from "./libraries/Errors.sol";
 import { IGasStation } from "./interfaces/IGasStation.sol";
+import { IGasOptimizer } from "./interfaces/IGasOptimizer.sol";
 import { VaultFactory } from "./VaultFactory.sol";
 import { Vault } from "./Vault.sol";
 import { PaymentTokenConfig } from "./types/PaymentTypes.sol";
@@ -41,6 +42,8 @@ contract GasStation is
     AggregatorV3Interface public ethUsdPriceFeed;
     // @dev Vault factory contract
     VaultFactory public vaultFactory;
+    // @dev Gas optimizer contract
+    IGasOptimizer public gasOptimizer;
     // @dev Maximum number of vaults
     uint256 public constant MAX_VAULTS = 10; // Limit number of vaults for gas efficiency
     // @dev Minimum deposit amount (in token decimals)
@@ -66,9 +69,14 @@ contract GasStation is
     // @dev Price feed decimals
     uint256 public constant PRICE_FEED_DECIMALS = 8;
 
+    // @dev Flag to use EIP-1559 transactions
+    bool public useEIP1559;
+
     // Add these events near the top with other events
     event RateLimitCheck(uint256 currentBlock, uint256 lastProcessedBlock, uint256 currentDeposits);
     event RateLimitUpdated(uint256 blockNumber, uint256 newCount);
+    event GasOptimizerSet(address indexed gasOptimizer);
+    event EIP1559ToggleUpdated(bool useEIP1559);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -99,6 +107,9 @@ contract GasStation is
 
         defaultToken = _defaultToken;
         _addPaymentToken(_defaultToken, _defaultPriceFeed);
+
+        // Default to not using EIP-1559
+        useEIP1559 = false;
 
         emit DefaultTokenUpdated(_defaultToken);
     }
@@ -210,6 +221,24 @@ contract GasStation is
         if (_vaultFactory == address(0)) revert Errors.InvalidAddress();
         vaultFactory = VaultFactory(_vaultFactory);
         emit VaultFactorySet(_vaultFactory);
+    }
+
+    /**
+     * @dev Set the gas optimizer address.
+     */
+    function setGasOptimizer(address _gasOptimizer) external nonReentrant onlyOwner {
+        if (_gasOptimizer == address(0)) revert Errors.InvalidAddress();
+        gasOptimizer = IGasOptimizer(_gasOptimizer);
+        emit GasOptimizerSet(_gasOptimizer);
+    }
+
+    /**
+     * @dev Toggle the use of EIP-1559 transactions.
+     */
+    function toggleEIP1559(bool _useEIP1559) external nonReentrant onlyOwner {
+        if (_useEIP1559 && address(gasOptimizer) == address(0)) revert Errors.InvalidAddress();
+        useEIP1559 = _useEIP1559;
+        emit EIP1559ToggleUpdated(_useEIP1559);
     }
 
     /**
@@ -438,7 +467,15 @@ contract GasStation is
         IERC20(tokenToUse).safeTransferFrom(msg.sender, address(this), amount);
         SafeERC20.forceApprove(IERC20(tokenToUse), vault, amount);
         Vault(payable(vault)).depositToken(tokenToUse, amount);
-        Vault(payable(vault)).sendEth(effectiveDestination, ethAmount);
+
+        // Send ETH using EIP-1559 if enabled, otherwise use regular transfer
+        if (useEIP1559 && address(gasOptimizer) != address(0)) {
+            // Use the gas optimizer to send ETH with EIP-1559
+            gasOptimizer.sendEthEIP1559(effectiveDestination, ethAmount, 0, 0);
+        } else {
+            // Use regular ETH transfer
+            Vault(payable(vault)).sendEth(effectiveDestination, ethAmount);
+        }
 
         emit DepositProcessed(msg.sender, effectiveDestination, tokenToUse, amount, ethAmount);
     }
