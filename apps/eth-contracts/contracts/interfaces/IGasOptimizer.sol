@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.28;
 
 /**
  * @title IGasOptimizer
@@ -27,9 +27,8 @@ interface IGasOptimizer {
      * @return maxPriorityFeePerGas The recommended max priority fee per gas
      * @return maxFeePerGas The recommended max fee per gas
      */
-    function getGasParameters() external view returns (
-        uint256 baseFee,
-        uint256 maxPriorityFeePerGas,
-        uint256 maxFeePerGas
-    );
+    function getGasParameters()
+        external
+        view
+        returns (uint256 baseFee, uint256 maxPriorityFeePerGas, uint256 maxFeePerGas);
 }
