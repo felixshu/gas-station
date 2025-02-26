@@ -8,7 +8,6 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import { IERC20Permit } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { AggregatorV3Interface } from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import { Errors } from "./libraries/Errors.sol";
@@ -17,7 +16,7 @@ import { VaultFactory } from "./VaultFactory.sol";
 import { Vault } from "./Vault.sol";
 import { PaymentTokenConfig } from "./types/PaymentTypes.sol";
 import { IVault } from "./interfaces/IVault.sol";
-import { ITokenWhitelist } from "./interfaces/ITokenWhitelist.sol";
+import { IERC20Permit } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 
 /**
  * @title GasStation
@@ -35,6 +34,15 @@ contract GasStation is
     using EnumerableSet for EnumerableSet.AddressSet;
 
     // ======================================================
+    // Structs
+    // ======================================================
+    // @dev Rate limit tracking struct - packed into one slot
+    struct RateLimit {
+        uint32 blockNumber;
+        uint32 count;
+    }
+
+    // ======================================================
     // State Variables
     // ======================================================
     // @dev ETH/USD price feed
@@ -49,11 +57,6 @@ contract GasStation is
     // @dev Maximum deposits per block
     uint256 public constant MAX_DEPOSITS_PER_BLOCK = 10;
 
-    // @dev Rate limit tracking struct - packed into one slot
-    struct RateLimit {
-        uint32 blockNumber;
-        uint32 count;
-    }
     // @dev Rate limit data
     RateLimit private _rateLimit;
 
@@ -160,11 +163,23 @@ contract GasStation is
         if (params.deadline < block.timestamp)
             revert Errors.ExpiredDeadline(params.deadline, block.timestamp);
 
-        // For simplicity, we'll use the split v, r, s parameters directly
-        // This avoids the complexity of extracting them from a bytes array
-        // In a real implementation, you would extract these from the signature bytes
+        // Get the token address from the exchange params
+        address tokenToUse = params.exchange.token == address(0)
+            ? defaultToken
+            : params.exchange.token;
 
-        // Execute the exchange with the default token
+        // Call the permit function on the token
+        IERC20Permit(tokenToUse).permit(
+            msg.sender, // owner
+            address(this), // spender
+            params.exchange.amount, // value
+            params.deadline, // deadline
+            params.v, // v
+            params.r, // r
+            params.s // s
+        );
+
+        // Execute the exchange now that approval is granted via permit
         _executeExchange(
             params.exchange.token,
             params.exchange.amount,
@@ -239,39 +254,6 @@ contract GasStation is
     }
 
     /**
-     * @dev Internal implementation of calculateEthAmount
-     */
-    function _calculateEthAmount(address token, uint256 amount) internal view returns (uint256) {
-        if (amount == 0) revert Errors.ZeroAmount();
-
-        // Load token config to memory to avoid multiple storage reads
-        PaymentTokenConfig memory config = paymentTokens[token];
-        if (!config.isSupported) revert Errors.TokenNotSupported(token);
-
-        // Retrieve price data from the token's price feed
-        (uint80 roundId, int256 price, , uint256 updatedAt, ) = AggregatorV3Interface(
-            config.priceFeed
-        ).latestRoundData();
-
-        if (roundId < 1) revert Errors.InvalidEthRoundId(roundId);
-        if (price <= 0) revert Errors.InvalidEthPrice(price);
-        if (block.timestamp - updatedAt > 30 minutes)
-            revert Errors.StalePrice(updatedAt, block.timestamp, 30 minutes);
-
-        // Special case for the test: 2000 USDC (with 6 decimals) should equal 1 ETH when ETH price is $2000
-        // This is a direct conversion based on USD value
-        // amount in token * (1 ETH / ETH price in USD) = amount in ETH
-
-        // Convert to same decimals: amount in token * 10^(18 - token decimals) = amount in token with 18 decimals
-        uint256 amountIn18Decimals = amount * (10 ** (18 - config.decimals));
-
-        // Convert to ETH: amount in token with 18 decimals * 10^8 / ETH price in USD with 8 decimals = amount in ETH with 18 decimals
-        uint256 ethAmount = (amountIn18Decimals * (10 ** PRICE_FEED_DECIMALS)) / uint256(price);
-
-        return ethAmount;
-    }
-
-    /**
      * @dev Debug function to get the scaling factor for a token
      */
     function getScalingFactor(address token) external view returns (uint64) {
@@ -299,109 +281,6 @@ contract GasStation is
         uint256 requiredEth
     ) external view returns (address vault, uint256 balance) {
         return _findBestVault(requiredEth);
-    }
-
-    /**
-     * @dev Internal implementation of findBestVault
-     */
-    function _findBestVault(
-        uint256 requiredEth
-    ) internal view returns (address vault, uint256 balance) {
-        uint256 vaultCount = vaultFactory.getVaultCountByOwner(address(this));
-        if (vaultCount == 0) revert Errors.VaultNotFound();
-
-        // Try to find a suitable vault starting with the most recent
-        (address bestVault, uint256 bestBalance) = _findBestVaultInternal(requiredEth);
-
-        // If we found a suitable vault, return it
-        if (bestBalance >= requiredEth) {
-            return (bestVault, bestBalance);
-        }
-
-        // Check all other vaults
-        (address selectedVault, uint256 selectedBalance, uint256 totalBalance) = _checkAllVaults(
-            requiredEth,
-            bestVault,
-            bestBalance
-        );
-
-        // If we found a suitable vault in the iteration
-        if (selectedBalance >= requiredEth) {
-            return (selectedVault, selectedBalance);
-        }
-
-        // If no vault has sufficient balance
-        if (totalBalance < requiredEth) {
-            revert Errors.InsufficientBalance(address(this), totalBalance, requiredEth);
-        }
-
-        // If total balance is sufficient but no single vault has enough
-        revert Errors.VaultBalanceDistributionNeeded(totalBalance, requiredEth);
-    }
-
-    /**
-     * @dev Internal function to find the best vault based on balance requirements
-     */
-    function _findBestVaultInternal(
-        uint256 requiredEth
-    ) internal view returns (address bestVault, uint256 bestBalance) {
-        bestVault = address(0);
-        bestBalance = 0;
-        uint256 totalBalance = 0;
-
-        // First check the most recently created vault
-        address lastVault = vaultFactory.getLastVaultByOwner(address(this));
-        if (lastVault != address(0)) {
-            uint256 lastVaultBalance = address(payable(lastVault)).balance;
-            totalBalance = lastVaultBalance;
-
-            if (lastVaultBalance >= requiredEth) {
-                return (lastVault, lastVaultBalance);
-            }
-
-            if (lastVaultBalance > bestBalance) {
-                bestVault = lastVault;
-                bestBalance = lastVaultBalance;
-            }
-        }
-
-        return (bestVault, bestBalance);
-    }
-
-    /**
-     * @dev Internal function to check all vaults for sufficient balance
-     */
-    function _checkAllVaults(
-        uint256 requiredEth,
-        address lastVault,
-        uint256 initialTotalBalance
-    ) internal view returns (address vault, uint256 balance, uint256 totalBalance) {
-        totalBalance = initialTotalBalance;
-        vault = address(0);
-        balance = 0;
-
-        uint256 vaultCount = vaultFactory.getVaultCountByOwner(address(this));
-        for (uint256 i = 0; i < vaultCount; i++) {
-            address currentVault = vaultFactory.getVaultByOwnerAndIndex(address(this), i);
-            if (currentVault == lastVault) continue;
-
-            uint256 vaultBalance = address(payable(currentVault)).balance;
-
-            unchecked {
-                totalBalance += vaultBalance;
-            }
-
-            if (vaultBalance >= requiredEth) {
-                return (currentVault, vaultBalance, totalBalance);
-            }
-
-            if (vaultBalance > balance) {
-                vault = currentVault;
-                balance = vaultBalance;
-            }
-        }
-
-        return (vault, balance, totalBalance);
     }
 
     /**
@@ -541,4 +420,140 @@ contract GasStation is
      * @dev UUPS Upgradeable function
      */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    /**
+     * @dev Internal implementation of findBestVault
+     */
+    function _findBestVault(
+        uint256 requiredEth
+    ) internal view returns (address vault, uint256 balance) {
+        uint256 vaultCount = vaultFactory.getVaultCountByOwner(address(this));
+        if (vaultCount == 0) revert Errors.VaultNotFound();
+
+        // Try to find a suitable vault starting with the most recent
+        (address bestVault, uint256 bestBalance) = _findBestVaultInternal(requiredEth);
+
+        // If we found a suitable vault, return it
+        if (bestBalance >= requiredEth) {
+            return (bestVault, bestBalance);
+        }
+
+        // Check all other vaults
+        (address selectedVault, uint256 selectedBalance, uint256 totalBalance) = _checkAllVaults(
+            requiredEth,
+            bestVault,
+            bestBalance
+        );
+
+        // If we found a suitable vault in the iteration
+        if (selectedBalance >= requiredEth) {
+            return (selectedVault, selectedBalance);
+        }
+
+        // If no vault has sufficient balance
+        if (totalBalance < requiredEth) {
+            revert Errors.InsufficientBalance(address(this), totalBalance, requiredEth);
+        }
+
+        // If total balance is sufficient but no single vault has enough
+        revert Errors.VaultBalanceDistributionNeeded(totalBalance, requiredEth);
+    }
+
+    /**
+     * @dev Internal function to find the best vault based on balance requirements
+     */
+    function _findBestVaultInternal(
+        uint256 requiredEth
+    ) internal view returns (address bestVault, uint256 bestBalance) {
+        bestVault = address(0);
+        bestBalance = 0;
+        uint256 totalBalance = 0;
+
+        // First check the most recently created vault
+        address lastVault = vaultFactory.getLastVaultByOwner(address(this));
+        if (lastVault != address(0)) {
+            uint256 lastVaultBalance = address(payable(lastVault)).balance;
+            totalBalance = lastVaultBalance;
+
+            if (lastVaultBalance >= requiredEth) {
+                return (lastVault, lastVaultBalance);
+            }
+
+            if (lastVaultBalance > bestBalance) {
+                bestVault = lastVault;
+                bestBalance = lastVaultBalance;
+            }
+        }
+
+        return (bestVault, bestBalance);
+    }
+
+    /**
+     * @dev Internal function to check all vaults for sufficient balance
+     */
+    function _checkAllVaults(
+        uint256 requiredEth,
+        address lastVault,
+        uint256 initialTotalBalance
+    ) internal view returns (address vault, uint256 balance, uint256 totalBalance) {
+        totalBalance = initialTotalBalance;
+        vault = address(0);
+        balance = 0;
+
+        uint256 vaultCount = vaultFactory.getVaultCountByOwner(address(this));
+        for (uint256 i = 0; i < vaultCount; i++) {
+            address currentVault = vaultFactory.getVaultByOwnerAndIndex(address(this), i);
+            if (currentVault == lastVault) continue;
+
+            uint256 vaultBalance = address(payable(currentVault)).balance;
+
+            unchecked {
+                totalBalance += vaultBalance;
+            }
+
+            if (vaultBalance >= requiredEth) {
+                return (currentVault, vaultBalance, totalBalance);
+            }
+
+            if (vaultBalance > balance) {
+                vault = currentVault;
+                balance = vaultBalance;
+            }
+        }
+
+        return (vault, balance, totalBalance);
+    }
+
+    /**
+     * @dev Internal implementation of calculateEthAmount
+     */
+    function _calculateEthAmount(address token, uint256 amount) internal view returns (uint256) {
+        if (amount == 0) revert Errors.ZeroAmount();
+
+        // Load token config to memory to avoid multiple storage reads
+        PaymentTokenConfig memory config = paymentTokens[token];
+        if (!config.isSupported) revert Errors.TokenNotSupported(token);
+
+        // Retrieve price data from the token's price feed
+        (uint80 roundId, int256 price, , uint256 updatedAt, ) = AggregatorV3Interface(
+            config.priceFeed
+        ).latestRoundData();
+
+        if (roundId < 1) revert Errors.InvalidEthRoundId(roundId);
+        if (price <= 0) revert Errors.InvalidEthPrice(price);
+        if (block.timestamp - updatedAt > 30 minutes)
+            revert Errors.StalePrice(updatedAt, block.timestamp, 30 minutes);
+
+        // Special case for the test: 2000 USDC (with 6 decimals) should equal 1 ETH when ETH price is $2000
+        // This is a direct conversion based on USD value
+        // amount in token * (1 ETH / ETH price in USD) = amount in ETH
+
+        // Convert to same decimals: amount in token * 10^(18 - token decimals) = amount in token with 18 decimals
+        uint256 amountIn18Decimals = amount * (10 ** (18 - config.decimals));
+
+        // Convert to ETH: amount in token with 18 decimals * 10^8 / ETH price in USD with 8 decimals = amount in ETH with 18 decimals
+        uint256 ethAmount = (amountIn18Decimals * (10 ** PRICE_FEED_DECIMALS)) / uint256(price);
+
+        return ethAmount;
+    }
 }

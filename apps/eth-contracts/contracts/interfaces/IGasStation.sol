@@ -61,7 +61,9 @@ interface IGasStation {
     struct PermitParams {
         ExchangeParams exchange;
         uint256 deadline;
-        bytes signature;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
     }
 
     // ======================================================
