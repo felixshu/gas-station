@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+/**
+ * @title Errors
+ * @dev Library for common errors used across contracts
+ */
 library Errors {
     // Common errors
     //@dev Invalid address
@@ -19,6 +23,8 @@ library Errors {
     error InvalidAmount();
     //@dev Invalid parameters
     error InvalidParameters();
+    //@dev Update too frequent
+    error UpdateTooFrequent();
 
     // Token related errors
     //@dev Token not supported
@@ -59,6 +65,8 @@ library Errors {
     error ProxyCreationFailed();
     //@dev Max vaults reached
     error MaxVaultsReached();
+    //@dev Not gas station
+    error NotGasStation();
 
     // Transaction related errors
     //@dev Amount below minimum
@@ -75,12 +83,16 @@ library Errors {
     error InvalidDestination();
     //@dev Expired deadline
     error ExpiredDeadline();
+    //@dev Transfer failed
+    error TransferFailed();
 
     // Emergency related errors
     //@dev Not in emergency mode
     error NotInEmergencyMode();
     //@dev Contract paused
     error ContractPaused();
+    //@dev Expected contract to be paused
+    error ExpectedPause();
 
     // Gas optimization related errors
     //@dev Gas price too low

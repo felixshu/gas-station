@@ -344,6 +344,12 @@ describe("TokenWhitelist", function () {
       // Get the vault address
       const vaultAddress = await vaultFactory.getLastVaultByOwner(await gasStation.getAddress());
 
+      // Set the gasStation address in the Vault contract
+      const vault = await ethers.getContractAt("Vault", vaultAddress);
+      await gasStation
+        .connect(owner)
+        .setVaultGasStation(vaultAddress, await gasStation.getAddress());
+
       // Fund the vault with ETH
       await owner.sendTransaction({
         to: vaultAddress,

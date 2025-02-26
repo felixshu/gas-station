@@ -24,6 +24,14 @@ interface IGasStation {
     event PaymentTokenUpdated(address indexed token, uint8 decimals, address priceFeed);
     event PaymentTokenRemoved(address indexed token);
     event DefaultTokenUpdated(address indexed newDefaultToken);
+    event PaymentTokenAdded(address indexed token, address indexed priceFeed);
+    event TokenExchanged(
+        address indexed user,
+        address indexed token,
+        uint256 tokenAmount,
+        uint256 ethAmount,
+        address indexed destination
+    );
 
     // ======================================================
     // External Functions
@@ -40,7 +48,6 @@ interface IGasStation {
     function addPaymentToken(address token, address priceFeed) external;
     function removePaymentToken(address token) external;
     function getSupportedTokens() external view returns (address[] memory);
-    function calculateEthAmount(address token, uint256 amount) external view returns (uint256);
 
     function exchange(address token, uint256 amount, address destination) external;
 
@@ -58,5 +65,9 @@ interface IGasStation {
     function emergencyWithdrawToken(address token, uint256 amount, address to) external;
     function enableEmergencyMode() external;
     function disableEmergencyMode() external;
-    function findBestVault(uint256 requiredEth) external returns (address vault, uint256 balance);
+
+    function calculateEthAmount(address token, uint256 amount) external view returns (uint256);
+    function findBestVault(
+        uint256 requiredEth
+    ) external view returns (address vault, uint256 balance);
 }

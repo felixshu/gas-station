@@ -2,41 +2,51 @@
 pragma solidity ^0.8.28;
 
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { TokenWhitelist } from "./TokenWhitelist.sol";
-import { Errors } from "./libraries/Errors.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IVault } from "./interfaces/IVault.sol";
-import { IGasOptimizer } from "./interfaces/IGasOptimizer.sol";
+import { ITokenWhitelist } from "./interfaces/ITokenWhitelist.sol";
+import { Errors } from "./libraries/Errors.sol";
 
+/**
+ * @title Vault
+ * @dev Contract for managing user funds
+ */
 contract Vault is
+    IVault,
     Initializable,
     OwnableUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable,
-    IVault
+    UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
 
-    // Token whitelist instance
-    TokenWhitelist public tokenWhitelist;
-    // Gas station instance
+    // State variables
+    address public tokenWhitelist;
     address public gasStation;
 
-    // @dev Mapping of user => (token => balance). For ETH, use address(0).
-    mapping(address => mapping(address => uint256)) public balances;
-    // @dev Tracks total user deposits per token (including ETH at address(0)).
-    mapping(address => uint256) public totalDeposits;
+    // User balances mapping: user => token => amount
+    mapping(address => mapping(address => uint256)) private _balances;
 
-    // Gas optimizer instance
-    IGasOptimizer public gasOptimizer;
+    // Total deposits per token
+    mapping(address => uint256) private _totalDeposits;
 
-    // Flag to use EIP-1559 transactions
-    bool public useEIP1559;
+    // Modifiers
+    modifier onlyGasStation() {
+        if (msg.sender != gasStation) revert Errors.NotGasStation();
+        _;
+    }
+
+    modifier onlyWhitelistedToken(address token) {
+        if (token != address(0) && !ITokenWhitelist(tokenWhitelist).isTokenWhitelisted(token))
+            revert Errors.TokenNotWhitelisted();
+        _;
+    }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -44,34 +54,34 @@ contract Vault is
     }
 
     /**
-     * @dev Initializes the contract setting the deployer as the initial owner.
-     * @param owner_ The address that will own the vault
-     * @param whitelist_ The address of the token whitelist contract
+     * @dev Initialize the contract
+     * @param owner_ The owner of the contract
+     * @param whitelist_ The token whitelist contract
      */
-    function initialize(address owner_, address whitelist_) public initializer {
+    function initialize(address owner_, address whitelist_) external initializer {
         __Ownable_init(owner_);
         __ReentrancyGuard_init();
         __Pausable_init();
-        gasStation = owner_; // Set GasStation as both owner and operator
+        __UUPSUpgradeable_init();
 
         if (whitelist_ == address(0)) revert Errors.InvalidAddress();
-        tokenWhitelist = TokenWhitelist(whitelist_);
-        emit WhitelistSet(whitelist_);
+        tokenWhitelist = whitelist_;
+        gasStation = owner_; // Set gasStation to owner initially
     }
 
     /**
-     * @dev Sets the token whitelist contract
-     * @param _whitelist Address of the TokenWhitelist contract
+     * @dev Set the token whitelist contract
+     * @param _whitelist The token whitelist contract
      */
     function setTokenWhitelist(address _whitelist) external onlyOwner {
         if (_whitelist == address(0)) revert Errors.InvalidAddress();
-        tokenWhitelist = TokenWhitelist(_whitelist);
+        tokenWhitelist = _whitelist;
         emit WhitelistSet(_whitelist);
     }
 
     /**
-     * @dev Set the gas station address
-     * @param _gasStation Address of the gas station
+     * @dev Set the gas station contract
+     * @param _gasStation The gas station contract
      */
     function setGasStation(address _gasStation) external onlyOwner {
         if (_gasStation == address(0)) revert Errors.InvalidAddress();
@@ -79,177 +89,100 @@ contract Vault is
     }
 
     /**
-     * @dev Checks if a token is whitelisted
-     * @param token Address of the token to check
+     * @dev Deposit ETH into the vault
      */
-    function _isTokenWhitelisted(address token) internal view returns (bool) {
-        if (address(tokenWhitelist) == address(0)) revert Errors.TokenNotWhitelisted();
-        return token == address(0) || tokenWhitelist.isTokenWhitelisted(token);
+    function depositEth() external payable nonReentrant whenNotPaused {
+        if (msg.value == 0) revert Errors.ZeroAmount();
+
+        // Update balances
+        _balances[msg.sender][address(0)] += msg.value;
+        _totalDeposits[address(0)] += msg.value;
+
+        emit Deposited(msg.sender, address(0), msg.value);
     }
 
     /**
-     * @dev Deposit ETH into the vault.
-     * Updates the sender's balance and the total deposits.
-     * Only allowed when the contract is not paused.
+     * @dev Deposit tokens into the vault
+     * @param token The token to deposit
+     * @param amount The amount to deposit
      */
-    function depositEth() external payable whenNotPaused {
-        balances[msg.sender][address(0)] += msg.value;
-        totalDeposits[address(0)] += msg.value;
-    }
-
-    /**
-     * @dev Deposit ERC20 tokens into the vault.
-     * Updates the sender's token balance and total deposits.
-     * Only allowed when the contract is not paused.
-     * Uses custom error if amount is zero.
-     * @param token The ERC20 token address.
-     * @param amount The token amount to deposit (must be > 0).
-     */
-    function depositToken(address token, uint256 amount) external nonReentrant whenNotPaused {
+    function depositToken(
+        address token,
+        uint256 amount
+    ) external nonReentrant whenNotPaused onlyWhitelistedToken(token) {
         if (amount == 0) revert Errors.ZeroAmount();
-        if (!_isTokenWhitelisted(token)) revert Errors.TokenNotWhitelisted();
-        balances[msg.sender][token] += amount;
-        totalDeposits[token] += amount;
+
+        // Transfer tokens from sender to vault
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+        // Update balances
+        _balances[msg.sender][token] += amount;
+        _totalDeposits[token] += amount;
+
         emit Deposited(msg.sender, token, amount);
     }
 
     /**
-     * @dev Withdraw ETH from the vault.
-     * Decreases the sender's balance and the total deposits.
-     * If the transfer fails, reverts with a custom error.
-     * @param amount The amount of ETH to withdraw.
-     * @param to The address to receive the ETH. If zero address, sends to msg.sender.
+     * @dev Withdraw ETH from the vault
+     * @param amount The amount to withdraw
+     * @param to The address to withdraw to
      */
-    function withdrawEth(uint256 amount, address to) external nonReentrant whenNotPaused onlyOwner {
-        address recipient = to == address(0) ? msg.sender : to;
-        // Only owner can withdraw to a different address
-        if (to != address(0) && to != msg.sender && msg.sender != owner())
-            revert Errors.InvalidAddress();
-        if (balances[msg.sender][address(0)] < amount) revert Errors.InsufficientBalance();
-        balances[msg.sender][address(0)] -= amount;
-        totalDeposits[address(0)] -= amount;
-        (bool success, ) = recipient.call{ value: amount }("");
-        if (!success) revert Errors.EthTransferFailed();
+    function withdrawEth(uint256 amount, address to) external onlyOwner nonReentrant whenNotPaused {
+        if (amount == 0) revert Errors.ZeroAmount();
+        if (_balances[msg.sender][address(0)] < amount) revert Errors.InsufficientBalance();
+
+        // Update balances
+        _balances[msg.sender][address(0)] -= amount;
+        _totalDeposits[address(0)] -= amount;
+
+        // Transfer ETH
+        (bool success, ) = to.call{ value: amount }("");
+        if (!success) revert Errors.TransferFailed();
+
         emit Withdrawn(msg.sender, address(0), amount);
     }
 
     /**
-     * @dev Withdraw ERC20 tokens from the vault.
-     * Decreases the sender's token balance and the total deposits.
-     * @param token The ERC20 token address.
-     * @param amount The token amount to withdraw.
-     * @param to The address to receive the tokens. If zero address, sends to msg.sender.
+     * @dev Withdraw tokens from the vault
+     * @param token The token to withdraw
+     * @param amount The amount to withdraw
+     * @param to The address to withdraw to
      */
     function withdrawToken(
         address token,
         uint256 amount,
         address to
-    ) external nonReentrant whenNotPaused onlyOwner {
-        address recipient = to == address(0) ? msg.sender : to;
-        // Only owner can withdraw to a different address
-        if (to != address(0) && to != msg.sender && msg.sender != owner())
-            revert Errors.InvalidAddress();
-        if (balances[msg.sender][token] < amount) revert Errors.InsufficientBalance();
-        if (!_isTokenWhitelisted(token)) revert Errors.TokenNotWhitelisted();
-        balances[msg.sender][token] -= amount;
-        totalDeposits[token] -= amount;
-        IERC20(token).safeTransfer(recipient, amount);
+    ) external onlyOwner nonReentrant whenNotPaused onlyWhitelistedToken(token) {
+        if (amount == 0) revert Errors.ZeroAmount();
+        if (_balances[msg.sender][token] < amount) revert Errors.InsufficientBalance();
+
+        // Update balances
+        _balances[msg.sender][token] -= amount;
+        _totalDeposits[token] -= amount;
+
+        // Transfer tokens
+        IERC20(token).safeTransfer(to, amount);
+
         emit Withdrawn(msg.sender, token, amount);
     }
 
     /**
-     * @dev Internal function to handle ETH deposits
+     * @dev Send ETH to a destination
+     * @param destination The destination to send ETH to
+     * @param amount The amount to send
      */
-    function _handleEthDeposit() internal {
-        balances[msg.sender][address(0)] += msg.value;
-        totalDeposits[address(0)] += msg.value;
-        emit Deposited(msg.sender, address(0), msg.value);
-    }
-
-    /**
-     * @dev Fallback function to accept ETH transfers.
-     */
-    receive() external payable whenNotPaused {
-        _handleEthDeposit();
-    }
-
-    /**
-     * @dev Set the gas optimizer address.
-     * @param _gasOptimizer The address of the gas optimizer contract
-     */
-    function setGasOptimizer(address _gasOptimizer) external onlyOwner {
-        if (_gasOptimizer == address(0)) revert Errors.InvalidAddress();
-        gasOptimizer = IGasOptimizer(_gasOptimizer);
-        emit GasOptimizerSet(_gasOptimizer);
-    }
-
-    /**
-     * @dev Toggle the use of EIP-1559 transactions.
-     * @param _useEIP1559 Whether to use EIP-1559 transactions
-     */
-    function toggleEIP1559(bool _useEIP1559) external onlyOwner {
-        if (_useEIP1559 && address(gasOptimizer) == address(0)) revert Errors.InvalidAddress();
-        useEIP1559 = _useEIP1559;
-        emit EIP1559ToggleUpdated(_useEIP1559);
-    }
-
-    /**
-     * @dev Send ETH to a destination address using EIP-1559.
-     * @param destination The address to send ETH to
-     * @param amount The amount of ETH to send
-     * @param maxPriorityFeePerGas Max priority fee per gas (in wei)
-     * @param maxFeePerGas Max fee per gas (in wei)
-     */
-    function sendEthEIP1559(
-        address destination,
-        uint256 amount,
-        uint256 maxPriorityFeePerGas,
-        uint256 maxFeePerGas
-    ) external nonReentrant whenNotPaused {
-        if (msg.sender != address(gasStation)) revert Errors.UnauthorizedAccess();
-        if (address(this).balance < amount) revert Errors.InsufficientBalance();
-        if (address(gasOptimizer) == address(0)) revert Errors.InvalidAddress();
-
-        // Use the gas optimizer to send ETH with EIP-1559
-        bool success = gasOptimizer.sendEthEIP1559(
-            destination,
-            amount,
-            maxPriorityFeePerGas,
-            maxFeePerGas
-        );
-
-        if (!success) revert Errors.EthTransferFailed();
-    }
-
-    /**
-     * @dev Send ETH to a destination address.
-     * @param destination The address to send ETH to
-     * @param amount The amount of ETH to send
-     */
-    function sendEth(address destination, uint256 amount) external nonReentrant whenNotPaused {
-        if (msg.sender != address(gasStation)) revert Errors.UnauthorizedAccess();
+    function sendEth(address destination, uint256 amount) external onlyGasStation nonReentrant {
         if (address(this).balance < amount) revert Errors.InsufficientBalance();
 
-        // If EIP-1559 is enabled and gas optimizer is set, use it
-        if (useEIP1559 && address(gasOptimizer) != address(0)) {
-            bool success = gasOptimizer.sendEthEIP1559(destination, amount, 0, 0);
-            if (!success) revert Errors.EthTransferFailed();
-        } else {
-            // Use regular ETH transfer
-            (bool success, ) = destination.call{ value: amount }("");
-            if (!success) revert Errors.EthTransferFailed();
-        }
+        // Perform the ETH transfer
+        (bool success, ) = destination.call{ value: amount }("");
+        if (!success) revert Errors.TransferFailed();
+
+        emit EthSent(destination, amount);
     }
 
-    // ==============================================================
-    //                   Emergency Functions
-    // ==============================================================
-
     /**
-     * @dev Pause deposit functions in case of emergency.
-     * When paused, new deposits are disabled but withdrawals remain available.
-     * Only the owner can trigger this.
+     * @dev Pause the contract in case of emergency
      */
     function emergencyPause() external onlyOwner {
         _pause();
@@ -257,8 +190,7 @@ contract Vault is
     }
 
     /**
-     * @dev Unpause deposit functions after an emergency.
-     * Only the owner can trigger this.
+     * @dev Unpause the contract
      */
     function emergencyUnpause() external onlyOwner {
         _unpause();
@@ -266,55 +198,62 @@ contract Vault is
     }
 
     /**
-     * @dev Emergency recovery of excess ERC20 tokens not allocated to user deposits.
-     * This function can only be called when the contract is paused.
-     * It calculates the recoverable (excess) amount as the difference between the token balance
-     * held by the contract and the total user deposits tracked.
-     * @param token The ERC20 token address to recover.
-     * @param amount The amount to recover.
-     * @param to The address that will receive the recovered tokens.
+     * @dev Recover tokens in case of emergency
+     * @param token The token to recover
+     * @param amount The amount to recover
+     * @param to The address to recover to
      */
     function emergencyRecoverToken(
         address token,
         uint256 amount,
         address to
-    ) external nonReentrant whenPaused onlyOwner {
-        if (!paused()) revert Errors.NotInEmergencyMode();
-        uint256 contractBalance = IERC20(token).balanceOf(address(this));
-        uint256 allocated = totalDeposits[token];
-        if (amount > contractBalance - allocated) revert Errors.InsufficientBalance();
+    ) external onlyOwner nonReentrant {
+        if (!paused()) revert Errors.ExpectedPause();
         IERC20(token).safeTransfer(to, amount);
         emit EmergencyRecovery(token, amount, to);
     }
 
     /**
-     * @dev Emergency recovery of excess ETH not allocated to user deposits.
-     * This function can only be called when the contract is paused.
-     * It calculates the recoverable ETH as the difference between the contract's ETH balance
-     * and the total ETH deposits tracked.
-     * @param amount The amount of ETH to recover.
-     * @param to The address that will receive the recovered ETH.
+     * @dev Recover ETH in case of emergency
+     * @param amount The amount to recover
+     * @param to The address to recover to
      */
-    function emergencyRecoverEth(
-        uint256 amount,
-        address to
-    ) external nonReentrant whenPaused onlyOwner {
-        if (!paused()) revert Errors.NotInEmergencyMode();
-        uint256 contractBalance = address(this).balance;
-        uint256 allocated = totalDeposits[address(0)];
-        if (amount > contractBalance - allocated) revert Errors.InsufficientBalance();
+    function emergencyRecoverEth(uint256 amount, address to) external onlyOwner nonReentrant {
+        if (!paused()) revert Errors.ExpectedPause();
         (bool success, ) = to.call{ value: amount }("");
-        if (!success) revert Errors.EthTransferFailed();
+        if (!success) revert Errors.TransferFailed();
         emit EmergencyRecovery(address(0), amount, to);
     }
 
-    //==============================================================
-    //                   UUPS Upgradeable Functions
-    //==============================================================
+    /**
+     * @dev Get the balance of a user for a specific token
+     * @param user The user address
+     * @param token The token address
+     * @return The balance of the user for the token
+     */
+    function balances(address user, address token) external view returns (uint256) {
+        return _balances[user][token];
+    }
 
+    /**
+     * @dev Get the total deposits for a specific token
+     * @param token The token address
+     * @return The total deposits for the token
+     */
+    function totalDeposits(address token) external view returns (uint256) {
+        return _totalDeposits[token];
+    }
+
+    /**
+     * @dev Receive ETH
+     */
+    receive() external payable {
+        emit Deposited(msg.sender, address(0), msg.value);
+    }
+
+    /**
+     * @dev Function to authorize an upgrade to a new implementation
+     * @param newImplementation The address of the new implementation
+     */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-    // Add new events
-    event GasOptimizerSet(address indexed gasOptimizer);
-    event EIP1559ToggleUpdated(bool useEIP1559);
 }

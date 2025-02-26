@@ -516,10 +516,12 @@ describe("Vault Contract Tests", function () {
         const initialOwnerBalance = await newToken.balanceOf(await owner.getAddress());
         const initialRecipientBalance = await newToken.balanceOf(await otherUser.getAddress());
 
-        // Execute the withdrawal of 0 tokens
-        await vault
-          .connect(owner)
-          .withdrawToken(await newToken.getAddress(), 0, await otherUser.getAddress());
+        // Execute the withdrawal of 0 tokens - should revert with ZeroAmount error
+        await expect(
+          vault
+            .connect(owner)
+            .withdrawToken(await newToken.getAddress(), 0, await otherUser.getAddress())
+        ).to.be.revertedWithCustomError(vault, "ZeroAmount");
 
         // Verify that no tokens were actually transferred
         expect(await newToken.balanceOf(await owner.getAddress())).to.equal(initialOwnerBalance);

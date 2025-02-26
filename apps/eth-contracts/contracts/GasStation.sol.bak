@@ -146,6 +146,18 @@ contract GasStation is
     }
 
     /**
+     * @dev Get all supported payment tokens
+     */
+    function getSupportedTokens() external view returns (address[] memory) {
+        uint256 length = _supportedTokens.length();
+        address[] memory tokens = new address[](length);
+        for (uint256 i = 0; i < length; i++) {
+            tokens[i] = _supportedTokens.at(i);
+        }
+        return tokens;
+    }
+
+    /**
      * @dev Exchange tokens for ETH using regular approve/transferFrom pattern.
      * @param token Input token address (use address(0) for default token)
      * @param amount Amount of tokens to exchange
@@ -198,16 +210,6 @@ contract GasStation is
         if (_vaultFactory == address(0)) revert Errors.InvalidAddress();
         vaultFactory = VaultFactory(_vaultFactory);
         emit VaultFactorySet(_vaultFactory);
-    }
-
-    /**
-     * @dev Set the gas station address in a Vault contract.
-     * @param vault The vault address
-     * @param gasStation The gas station address
-     */
-    function setVaultGasStation(address vault, address gasStation) external nonReentrant onlyOwner {
-        if (vault == address(0) || gasStation == address(0)) revert Errors.InvalidAddress();
-        Vault(payable(vault)).setGasStation(gasStation);
     }
 
     /**
@@ -275,18 +277,6 @@ contract GasStation is
         unchecked {
             return (amount * scalingFactor) / uint256(price);
         }
-    }
-
-    /**
-     * @dev Get all supported payment tokens
-     */
-    function getSupportedTokens() external view returns (address[] memory) {
-        uint256 length = _supportedTokens.length();
-        address[] memory tokens = new address[](length);
-        for (uint256 i = 0; i < length; i++) {
-            tokens[i] = _supportedTokens.at(i);
-        }
-        return tokens;
     }
 
     /**

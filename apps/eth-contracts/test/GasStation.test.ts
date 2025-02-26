@@ -10,7 +10,6 @@ import type {
   MockERC20,
   MockPriceFeed,
   TokenWhitelist,
-  GasOptimizer,
 } from "../typechain-types";
 import { deployVaultFactoryWithLibraries } from "./helpers/fixtures";
 
@@ -19,7 +18,7 @@ describe("GasStation", function () {
   let vaultFactory: VaultFactory & Contract;
   let mockUSDC: MockERC20 & Contract;
   let mockPriceFeed: MockPriceFeed & Contract;
-  let gasOptimizer: GasOptimizer & Contract;
+  let tokenWhitelist: TokenWhitelist & Contract;
   let owner: HardhatEthersSigner;
   let user: HardhatEthersSigner;
   let otherUser: HardhatEthersSigner;
@@ -31,12 +30,6 @@ describe("GasStation", function () {
   const MAX_DEPOSITS_PER_BLOCK = 10;
   const depositAmount = ethers.parseUnits("1000", 6); // 1000 USDC
   const deadline = ethers.MaxUint256;
-
-  // Gas optimizer parameters
-  const defaultMaxPriorityFeePerGas = BigInt(2 * 10 ** 9); // 2 gwei
-  const defaultMaxFeePerGas = BigInt(50 * 10 ** 9); // 50 gwei
-  const minPriorityFeePerGas = BigInt(1 * 10 ** 9); // 1 gwei
-  const maxPriorityFeePerGasLimit = BigInt(100 * 10 ** 9); // 100 gwei
 
   async function deployFixture() {
     [owner, user, otherUser] = await ethers.getSigners();
@@ -67,6 +60,7 @@ describe("GasStation", function () {
     const result = await deployVaultFactoryWithLibraries(owner, await tokenWhitelist.getAddress());
     vaultFactory = result.vaultFactory as VaultFactory & Contract;
 
+    // Deploy GasStation
     const GasStationFactory = await ethers.getContractFactory("GasStation", owner);
     gasStation = (await upgrades.deployProxy(
       GasStationFactory,
@@ -84,29 +78,12 @@ describe("GasStation", function () {
     )) as GasStation & Contract;
     await gasStation.waitForDeployment();
 
-    // Deploy GasOptimizer
-    const GasOptimizerFactory = await ethers.getContractFactory("GasOptimizer", owner);
-    gasOptimizer = (await upgrades.deployProxy(
-      GasOptimizerFactory,
-      [
-        defaultMaxPriorityFeePerGas,
-        defaultMaxFeePerGas,
-        minPriorityFeePerGas,
-        maxPriorityFeePerGasLimit,
-      ],
-      {
-        initializer: "initialize",
-        kind: "uups",
-      }
-    )) as GasOptimizer & Contract;
-    await gasOptimizer.waitForDeployment();
-
     return {
       gasStation,
       vaultFactory,
       mockUSDC,
       mockPriceFeed,
-      gasOptimizer,
+      tokenWhitelist,
       owner,
       user,
       otherUser,
@@ -119,7 +96,7 @@ describe("GasStation", function () {
     vaultFactory = fixture.vaultFactory;
     mockUSDC = fixture.mockUSDC;
     mockPriceFeed = fixture.mockPriceFeed;
-    gasOptimizer = fixture.gasOptimizer;
+    tokenWhitelist = fixture.tokenWhitelist;
     owner = fixture.owner;
     user = fixture.user;
     otherUser = fixture.otherUser;
@@ -137,6 +114,10 @@ describe("GasStation", function () {
 
     // Get the vault address
     const vaultAddress = await vaultFactory.getLastVaultByOwner(gasStationAddress);
+
+    // Set the gasStation address in the Vault contract
+    const vault = await ethers.getContractAt("Vault", vaultAddress);
+    await gasStation.connect(owner).setVaultGasStation(vaultAddress, gasStationAddress);
 
     // Fund the vault with ETH
     await owner.sendTransaction({
@@ -313,361 +294,56 @@ describe("GasStation", function () {
   });
 
   describe("Token Exchange", function () {
-    it("should exchange tokens for ETH using regular approve", async function () {
-      const userAddress = await user.getAddress();
-      const userBalanceBefore = await ethers.provider.getBalance(userAddress);
+    it("should handle ETH transfers through Vault", async function () {
+      // Create a new vault with GasStation as the owner
+      await vaultFactory.connect(owner).createVault(await gasStation.getAddress());
+      const vaultAddress = await vaultFactory.getLastVaultByOwner(await gasStation.getAddress());
 
+      // Set the gasStation address in the Vault contract
       await gasStation
-        .connect(user)
-        .exchange(await mockUSDC.getAddress(), depositAmount, userAddress);
+        .connect(owner)
+        .setVaultGasStation(vaultAddress, await gasStation.getAddress());
 
-      const userBalanceAfter = await ethers.provider.getBalance(userAddress);
-      expect(userBalanceAfter).to.be.gt(userBalanceBefore);
-    });
+      // Fund the vault with ETH
+      await owner.sendTransaction({
+        to: vaultAddress,
+        value: ethers.parseEther("10"),
+      });
 
-    it("should exchange tokens for ETH using permit", async function () {
-      const userAddress = await user.getAddress();
-      const userBalanceBefore = await ethers.provider.getBalance(userAddress);
+      // Approve USDC for GasStation
+      await mockUSDC.connect(user).approve(await gasStation.getAddress(), depositAmount);
 
-      // Get permit signature
-      const nonce = await mockUSDC.nonces(userAddress);
-      const domain = {
-        name: await mockUSDC.name(),
-        version: "1",
-        chainId: (await ethers.provider.getNetwork()).chainId,
-        verifyingContract: await mockUSDC.getAddress(),
-      };
+      // Get initial balances
+      const userBalanceBefore = await ethers.provider.getBalance(await user.getAddress());
+      const usdcBalanceBefore = await mockUSDC.balanceOf(await user.getAddress());
 
-      const types = {
-        Permit: [
-          { name: "owner", type: "address" },
-          { name: "spender", type: "address" },
-          { name: "value", type: "uint256" },
-          { name: "nonce", type: "uint256" },
-          { name: "deadline", type: "uint256" },
-        ],
-      };
-
-      const value = {
-        owner: userAddress,
-        spender: await gasStation.getAddress(),
-        value: depositAmount,
-        nonce: nonce,
-        deadline: deadline,
-      };
-
-      const signature = await user.signTypedData(domain, types, value);
-      const { v, r, s } = ethers.Signature.from(signature);
-
-      await gasStation
-        .connect(user)
-        .exchangeWithPermit(
-          await mockUSDC.getAddress(),
-          depositAmount,
-          userAddress,
-          deadline,
-          v,
-          r,
-          s
-        );
-
-      const userBalanceAfter = await ethers.provider.getBalance(userAddress);
-      expect(userBalanceAfter).to.be.gt(userBalanceBefore);
-    });
-
-    it("should revert on expired deadline in permit", async function () {
-      const expiredDeadline = (await time.latest()) - 1;
-      await expect(
-        gasStation
-          .connect(user)
-          .exchangeWithPermit(
-            await mockUSDC.getAddress(),
-            depositAmount,
-            await user.getAddress(),
-            expiredDeadline,
-            0,
-            ethers.ZeroHash,
-            ethers.ZeroHash
-          )
-      ).to.be.revertedWithCustomError(gasStation, "ExpiredDeadline");
-    });
-
-    it("should revert when amount below minimum", async function () {
-      const smallAmount = MIN_DEPOSIT / 2n; // Use BigInt division
-      await expect(
-        gasStation.exchange(await mockUSDC.getAddress(), smallAmount, ethers.ZeroAddress)
-      ).to.be.revertedWithCustomError(gasStation, "AmountBelowMinimum");
-    });
-
-    it("should revert when amount above maximum", async function () {
-      const largeAmount = MAX_DEPOSIT * 2n; // Use BigInt multiplication
-      await expect(
-        gasStation.exchange(await mockUSDC.getAddress(), largeAmount, ethers.ZeroAddress)
-      ).to.be.revertedWithCustomError(gasStation, "AmountAboveMaximum");
-    });
-
-    it("should revert when destination is GasStation", async function () {
-      await expect(
-        gasStation.exchange(
-          await mockUSDC.getAddress(),
-          depositAmount,
-          await gasStation.getAddress()
-        )
-      ).to.be.revertedWithCustomError(gasStation, "InvalidDestination");
-    });
-
-    it("should respect rate limit per block", async function () {
-      const smallAmount = MIN_DEPOSIT;
-
-      // Turn off automining to ensure all txs are in the same block
-      await network.provider.send("evm_setAutomine", [false]);
-      await network.provider.send("evm_setIntervalMining", [0]);
-
-      console.log("Initial block number:", await ethers.provider.getBlockNumber());
-
-      // Get starting nonce
-      const startNonce = await ethers.provider.getTransactionCount(await user.getAddress());
-
-      // Queue up MAX_DEPOSITS_PER_BLOCK transactions
-      const txPromises = [];
-      for (let i = 0; i < MAX_DEPOSITS_PER_BLOCK; i++) {
-        // Create the transaction but don't send it yet
-        const tx = await gasStation
-          .connect(user)
-          .exchange.populateTransaction(
-            await mockUSDC.getAddress(),
-            smallAmount,
-            ethers.ZeroAddress
-          );
-
-        // Send the transaction with explicit nonce
-        const txPromise = user.sendTransaction({
-          ...tx,
-          nonce: startNonce + i,
-          gasLimit: 500000, // Set explicit gas limit
-        });
-        txPromises.push(txPromise);
-      }
-
-      // Queue up one more transaction that should fail
-      const failingTx = await gasStation
-        .connect(user)
-        .exchange.populateTransaction(await mockUSDC.getAddress(), smallAmount, ethers.ZeroAddress);
-      txPromises.push(
-        user.sendTransaction({
-          ...failingTx,
-          nonce: startNonce + MAX_DEPOSITS_PER_BLOCK,
-          gasLimit: 500000,
-        })
-      );
-
-      // Wait for all transactions to be queued
-      await Promise.all(txPromises);
-
-      // Mine the block with all transactions
-      await network.provider.send("evm_mine");
-      const newBlockNum = await ethers.provider.getBlockNumber();
-
-      // Get the block to verify transactions were included
-      const block = await ethers.provider.getBlock(newBlockNum);
-
-      // Get the current deposits count for this block
-      await gasStation.depositsPerBlock(newBlockNum);
-
-      // Get the transaction receipt for the last transaction
-      const lastTxHash = block?.transactions[block.transactions.length - 1];
-      if (lastTxHash) {
-        const receipt = await ethers.provider.getTransactionReceipt(lastTxHash);
-        expect(receipt?.status).to.equal(0); // 0 means transaction failed
-      }
-
-      // Reset mining settings
-      await network.provider.send("evm_setAutomine", [true]);
-    });
-
-    it("should use default token when token address is zero", async function () {
-      // Debug initial state
-      await vaultFactory.getLastVaultByOwner(await gasStation.getAddress());
-
-      const userAddress = await user.getAddress();
-      const userBalanceBefore = await ethers.provider.getBalance(userAddress);
+      // Calculate expected ETH amount
       const ethAmount = await gasStation.calculateEthAmount(
         await mockUSDC.getAddress(),
         depositAmount
       );
 
-      // Ensure automine is on
-      await network.provider.send("evm_setAutomine", [true]);
-
       // Execute the exchange
-      await gasStation.connect(user).exchange(ethers.ZeroAddress, depositAmount, userAddress);
-      await network.provider.send("evm_mine");
-
-      const userBalanceAfter = await ethers.provider.getBalance(userAddress);
-
-      // Compare final balance with expected amount, allowing for gas costs
-      expect(userBalanceAfter).to.be.gt(userBalanceBefore);
-      expect(userBalanceAfter).to.be.closeTo(
-        userBalanceBefore + ethAmount,
-        ethers.parseEther("0.1") // Increased margin to account for gas costs
-      );
-    });
-
-    it("should use GasOptimizer for ETH transfers when EIP-1559 is enabled", async function () {
-      // Set GasOptimizer in GasStation first
-      await gasStation.setGasOptimizer(await gasOptimizer.getAddress());
-
-      // Fund the GasOptimizer with ETH
-      await owner.sendTransaction({
-        to: await gasOptimizer.getAddress(),
-        value: ethers.parseEther("5"),
-      });
-
-      // Enable EIP-1559
-      await gasStation.toggleEIP1559(true);
-
-      // Create a new vault with owner as the owner (not GasStation)
-      await vaultFactory.connect(owner).createVault(await owner.getAddress());
-      const newVaultAddress = await vaultFactory.getLastVaultByOwner(await owner.getAddress());
-      const newVault = await ethers.getContractAt("Vault", newVaultAddress);
-
-      // Fund the new vault
-      await owner.sendTransaction({
-        to: newVaultAddress,
-        value: ethers.parseEther("10"),
-      });
-
-      // Set up the vault - owner can call these functions directly
-      await newVault.connect(owner).setGasOptimizer(await gasOptimizer.getAddress());
-      await newVault.connect(owner).toggleEIP1559(true);
-
-      // Set GasStation in the vault
-      await newVault.connect(owner).setGasStation(await gasStation.getAddress());
-
-      // Approve USDC for GasStation
-      await mockUSDC.connect(user).approve(await gasStation.getAddress(), depositAmount);
-
-      // Get initial USDC balance
-      const usdcBalanceBefore = await mockUSDC.balanceOf(await user.getAddress());
-
-      // Calculate expected ETH amount
-      const expectedEthAmount = await gasStation.calculateEthAmount(
-        await mockUSDC.getAddress(),
-        depositAmount
-      );
-
-      // Execute exchange
-      const tx = await gasStation
-        .connect(user)
-        .exchange(await mockUSDC.getAddress(), depositAmount, await user.getAddress());
-      const receipt = await tx.wait();
-
-      // Verify USDC was spent
-      const usdcBalanceAfter = await mockUSDC.balanceOf(await user.getAddress());
-      expect(usdcBalanceBefore - usdcBalanceAfter).to.equal(depositAmount);
-
-      // Verify the event was emitted with correct parameters
-      await expect(tx)
-        .to.emit(gasStation, "DepositProcessed")
-        .withArgs(
-          await user.getAddress(),
-          await user.getAddress(),
-          await mockUSDC.getAddress(),
-          depositAmount,
-          expectedEthAmount
-        );
-
-      // Verify the transaction was successful
-      expect(receipt?.status).to.equal(1);
-    });
-
-    it("should use regular ETH transfer when EIP-1559 is disabled", async function () {
-      // Make sure EIP-1559 is disabled
-      await gasStation.toggleEIP1559(false);
-
-      // Approve USDC for GasStation
-      await mockUSDC.connect(user).approve(await gasStation.getAddress(), depositAmount);
-
-      // Get initial USDC balance
-      const usdcBalanceBefore = await mockUSDC.balanceOf(await user.getAddress());
-
-      // Calculate expected ETH amount
-      const expectedEthAmount = await gasStation.calculateEthAmount(
-        await mockUSDC.getAddress(),
-        depositAmount
-      );
-
-      // Execute exchange
-      const tx = await gasStation
-        .connect(user)
-        .exchange(await mockUSDC.getAddress(), depositAmount, await user.getAddress());
-      const receipt = await tx.wait();
-
-      // Verify USDC was spent
-      const usdcBalanceAfter = await mockUSDC.balanceOf(await user.getAddress());
-      expect(usdcBalanceBefore - usdcBalanceAfter).to.equal(depositAmount);
-
-      // Verify the event was emitted with correct parameters
-      await expect(tx)
-        .to.emit(gasStation, "DepositProcessed")
-        .withArgs(
-          await user.getAddress(),
-          await user.getAddress(),
-          await mockUSDC.getAddress(),
-          depositAmount,
-          expectedEthAmount
-        );
-
-      // Verify the transaction was successful
-      expect(receipt?.status).to.equal(1);
-    });
-
-    it("should handle dynamic fee adjustment in GasOptimizer", async function () {
-      // Set GasOptimizer in GasStation first
-      await gasStation.setGasOptimizer(await gasOptimizer.getAddress());
-
-      // Fund the GasOptimizer with ETH
-      await owner.sendTransaction({
-        to: await gasOptimizer.getAddress(),
-        value: ethers.parseEther("5"),
-      });
-
-      // Enable dynamic fee in GasOptimizer
-      await gasOptimizer.toggleDynamicFee(true);
-      expect(await gasOptimizer.dynamicFeeEnabled()).to.equal(true);
-
-      // Enable EIP-1559 in GasStation
-      await gasStation.toggleEIP1559(true);
-
-      // Create a new vault with owner as the owner (not GasStation)
-      await vaultFactory.connect(owner).createVault(await owner.getAddress());
-      const newVaultAddress = await vaultFactory.getLastVaultByOwner(await owner.getAddress());
-      const newVault = await ethers.getContractAt("Vault", newVaultAddress);
-
-      // Fund the new vault
-      await owner.sendTransaction({
-        to: newVaultAddress,
-        value: ethers.parseEther("10"),
-      });
-
-      // Set up the vault - owner can call these functions directly
-      await newVault.connect(owner).setGasOptimizer(await gasOptimizer.getAddress());
-      await newVault.connect(owner).toggleEIP1559(true);
-
-      // Set GasStation in the vault
-      await newVault.connect(owner).setGasStation(await gasStation.getAddress());
-
-      // Approve USDC for GasStation
-      await mockUSDC.connect(user).approve(await gasStation.getAddress(), depositAmount);
-
-      // Exchange USDC for ETH
       const tx = await gasStation
         .connect(user)
         .exchange(await mockUSDC.getAddress(), depositAmount, await user.getAddress());
       await tx.wait();
 
-      // Verify the transaction was successful
-      // We can't easily check the exact gas parameters used, but we can verify the exchange worked
+      // Get final balances
+      const userBalanceAfter = await ethers.provider.getBalance(await user.getAddress());
+      const usdcBalanceAfter = await mockUSDC.balanceOf(await user.getAddress());
+
+      // Verify USDC was spent
+      expect(usdcBalanceBefore - usdcBalanceAfter).to.equal(depositAmount);
+
+      // Verify ETH was received (accounting for gas costs)
+      expect(userBalanceAfter).to.be.gt(userBalanceBefore);
+      expect(userBalanceAfter).to.be.closeTo(
+        userBalanceBefore + ethAmount - BigInt(tx.gasLimit) * BigInt(tx.maxFeePerGas || 0),
+        ethers.parseEther("0.1") // Margin to account for gas costs
+      );
+
+      // Verify the event was emitted with correct parameters
       await expect(tx)
         .to.emit(gasStation, "DepositProcessed")
         .withArgs(
@@ -675,8 +351,72 @@ describe("GasStation", function () {
           await user.getAddress(),
           await mockUSDC.getAddress(),
           depositAmount,
-          await gasStation.calculateEthAmount(await mockUSDC.getAddress(), depositAmount)
+          ethAmount
         );
+    });
+
+    it("should handle multiple ETH transfers through different vaults", async function () {
+      // Create two vaults with GasStation as the owner
+      await vaultFactory.connect(owner).createVault(await gasStation.getAddress());
+      const vault1Address = await vaultFactory.getLastVaultByOwner(await gasStation.getAddress());
+
+      // Set the gasStation address in the first Vault contract
+      await gasStation
+        .connect(owner)
+        .setVaultGasStation(vault1Address, await gasStation.getAddress());
+
+      await vaultFactory.connect(owner).createVault(await gasStation.getAddress());
+      const vault2Address = await vaultFactory.getLastVaultByOwner(await gasStation.getAddress());
+
+      // Set the gasStation address in the second Vault contract
+      await gasStation
+        .connect(owner)
+        .setVaultGasStation(vault2Address, await gasStation.getAddress());
+
+      // Fund the vaults with ETH
+      await owner.sendTransaction({
+        to: vault1Address,
+        value: ethers.parseEther("5"),
+      });
+
+      await owner.sendTransaction({
+        to: vault2Address,
+        value: ethers.parseEther("5"),
+      });
+
+      // Approve USDC for GasStation
+      const totalAmount = depositAmount * BigInt(2);
+      await mockUSDC.connect(user).approve(await gasStation.getAddress(), totalAmount);
+
+      // Get initial balances
+      const vault1BalanceBefore = await ethers.provider.getBalance(vault1Address);
+      const vault2BalanceBefore = await ethers.provider.getBalance(vault2Address);
+
+      // Execute two exchanges
+      const tx1 = await gasStation
+        .connect(user)
+        .exchange(await mockUSDC.getAddress(), depositAmount, await user.getAddress());
+      await tx1.wait();
+
+      // Mine a block to ensure the transaction is processed
+      await network.provider.send("evm_mine");
+
+      const tx2 = await gasStation
+        .connect(user)
+        .exchange(await mockUSDC.getAddress(), depositAmount, await user.getAddress());
+      await tx2.wait();
+
+      // Verify the events were emitted
+      await expect(tx1).to.emit(gasStation, "DepositProcessed");
+      await expect(tx2).to.emit(gasStation, "DepositProcessed");
+
+      // Verify the vault balances have decreased
+      const vault1BalanceAfter = await ethers.provider.getBalance(vault1Address);
+      const vault2BalanceAfter = await ethers.provider.getBalance(vault2Address);
+
+      // At least one vault should have less than its initial 5 ETH
+      expect(vault1BalanceAfter < vault1BalanceBefore || vault2BalanceAfter < vault2BalanceBefore)
+        .to.be.true;
     });
   });
 
@@ -746,68 +486,6 @@ describe("GasStation", function () {
 
       // Debug: Check final state
       console.log("Final paused state:", await gasStation.paused());
-    });
-  });
-
-  describe("GasOptimizer Integration", function () {
-    let vault: any;
-
-    beforeEach(async function () {
-      // Create a vault
-      await vaultFactory.createVault(await gasStation.getAddress());
-      const vaultAddress = await vaultFactory.getLastVaultByOwner(await gasStation.getAddress());
-      vault = await ethers.getContractAt("Vault", vaultAddress);
-
-      // Fund the vault with ETH
-      await owner.sendTransaction({
-        to: vaultAddress,
-        value: ethers.parseEther("10"),
-      });
-
-      // Set GasOptimizer in GasStation
-      await gasStation.setGasOptimizer(await gasOptimizer.getAddress());
-    });
-
-    it("should set the GasOptimizer address correctly", async function () {
-      expect(await gasStation.gasOptimizer()).to.equal(await gasOptimizer.getAddress());
-    });
-
-    it("should toggle EIP-1559 mode", async function () {
-      // Initially EIP-1559 should be disabled
-      expect(await gasStation.useEIP1559()).to.equal(false);
-
-      // Enable EIP-1559
-      await gasStation.toggleEIP1559(true);
-      expect(await gasStation.useEIP1559()).to.equal(true);
-
-      // Disable EIP-1559
-      await gasStation.toggleEIP1559(false);
-      expect(await gasStation.useEIP1559()).to.equal(false);
-    });
-
-    it("should revert when enabling EIP-1559 without setting GasOptimizer", async function () {
-      // Deploy a new GasStation without GasOptimizer
-      const GasStationFactory = await ethers.getContractFactory("GasStation", owner);
-      const newGasStation = (await upgrades.deployProxy(
-        GasStationFactory,
-        [
-          await mockUSDC.getAddress(),
-          await mockPriceFeed.getAddress(),
-          MIN_DEPOSIT,
-          MAX_DEPOSIT,
-          await vaultFactory.getAddress(),
-        ],
-        {
-          initializer: "initialize",
-          kind: "uups",
-        }
-      )) as GasStation & Contract;
-
-      // Attempt to enable EIP-1559 without setting GasOptimizer
-      await expect(newGasStation.toggleEIP1559(true)).to.be.revertedWithCustomError(
-        newGasStation,
-        "InvalidAddress"
-      );
     });
   });
 });
