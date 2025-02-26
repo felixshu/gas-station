@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { Vault } from "../Vault.sol";
+import { IVault } from "../interfaces/IVault.sol";
 
 /**
  * @title VaultUtils
@@ -118,7 +119,11 @@ library VaultUtils {
                 : currentSourceBalance;
 
             // Move ETH from source to target
-            try currentSource.sendEth(targetVault, amountToMove) {
+            try
+                currentSource.sendEth(
+                    IVault.EthParams({ amount: amountToMove, recipient: targetVault })
+                )
+            {
                 // Update balances
                 currentSourceBalance -= amountToMove;
                 amountNeeded -= amountToMove;

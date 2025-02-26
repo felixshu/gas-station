@@ -10,6 +10,7 @@ import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/P
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { Vault } from "./Vault.sol";
+import { IVault } from "./interfaces/IVault.sol";
 import { TokenWhitelist } from "./TokenWhitelist.sol";
 import { Errors } from "./libraries/Errors.sol";
 import { VaultUtils } from "./libraries/VaultUtils.sol";
@@ -86,8 +87,8 @@ contract VaultFactory is
         __ReentrancyGuard_init();
         __Pausable_init();
 
-        if (_vaultImplementation == address(0)) revert Errors.InvalidAddress();
-        if (_tokenWhitelist == address(0)) revert Errors.InvalidAddress();
+        if (_vaultImplementation == address(0)) revert Errors.InvalidAddress(_vaultImplementation);
+        if (_tokenWhitelist == address(0)) revert Errors.InvalidAddress(_tokenWhitelist);
 
         proxyAdmin = new ProxyAdmin(msg.sender);
         vaultImplementation = _vaultImplementation;
@@ -104,15 +105,15 @@ contract VaultFactory is
     function createVault(
         address vaultOwner
     ) external nonReentrant whenNotPaused onlyOwner returns (address vault) {
-        if (vaultImplementation == address(0)) revert Errors.InvalidVault();
-        if (address(tokenWhitelist) == address(0)) revert Errors.TokenNotWhitelisted();
-        if (vaultOwner == address(0)) revert Errors.InvalidAddress();
+        if (vaultImplementation == address(0)) revert Errors.InvalidVault(vaultImplementation);
+        if (address(tokenWhitelist) == address(0))
+            revert Errors.TokenNotWhitelisted(address(tokenWhitelist));
+        if (vaultOwner == address(0)) revert Errors.InvalidAddress(vaultOwner);
 
         // Initialize vault with owner and configuration
         bytes memory initData = abi.encodeWithSelector(
             Vault.initialize.selector,
-            vaultOwner,
-            address(tokenWhitelist)
+            IVault.InitParams({ owner: vaultOwner, whitelist: address(tokenWhitelist) })
         );
 
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
@@ -123,11 +124,12 @@ contract VaultFactory is
 
         vault = address(proxy);
 
-        if (vault == address(0)) revert Errors.ProxyCreationFailed();
+        if (vault == address(0)) revert Errors.ProxyCreationFailed(vaultImplementation);
 
         // Record the new vault
-        if (!_allVaults.add(vault)) revert Errors.ProxyCreationFailed();
-        if (!_ownerVaults[vaultOwner].add(vault)) revert Errors.ProxyCreationFailed();
+        if (!_allVaults.add(vault)) revert Errors.ProxyCreationFailed(vaultImplementation);
+        if (!_ownerVaults[vaultOwner].add(vault))
+            revert Errors.ProxyCreationFailed(vaultImplementation);
 
         emit VaultCreated(vaultOwner, vault);
     }
@@ -140,15 +142,16 @@ contract VaultFactory is
     function createMultipleVaults(
         address[] calldata vaultOwners
     ) external nonReentrant whenNotPaused onlyOwner returns (address[] memory vaults) {
-        if (vaultImplementation == address(0)) revert Errors.InvalidVault();
-        if (address(tokenWhitelist) == address(0)) revert Errors.TokenNotWhitelisted();
+        if (vaultImplementation == address(0)) revert Errors.InvalidVault(vaultImplementation);
+        if (address(tokenWhitelist) == address(0))
+            revert Errors.TokenNotWhitelisted(address(tokenWhitelist));
 
         uint256 length = vaultOwners.length;
         vaults = new address[](length);
 
         for (uint256 i = 0; i < length; i++) {
             address vaultOwner = vaultOwners[i];
-            if (vaultOwner == address(0)) revert Errors.InvalidAddress();
+            if (vaultOwner == address(0)) revert Errors.InvalidAddress(vaultOwner);
 
             // Create a single vault using the helper function
             vaults[i] = _createSingleVault(vaultOwner);
@@ -164,8 +167,7 @@ contract VaultFactory is
         // Initialize vault with owner and configuration
         bytes memory initData = abi.encodeWithSelector(
             Vault.initialize.selector,
-            vaultOwner,
-            address(tokenWhitelist)
+            IVault.InitParams({ owner: vaultOwner, whitelist: address(tokenWhitelist) })
         );
 
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
@@ -176,11 +178,12 @@ contract VaultFactory is
 
         vault = address(proxy);
 
-        if (vault == address(0)) revert Errors.ProxyCreationFailed();
+        if (vault == address(0)) revert Errors.ProxyCreationFailed(vaultImplementation);
 
         // Record the new vault
-        if (!_allVaults.add(vault)) revert Errors.ProxyCreationFailed();
-        if (!_ownerVaults[vaultOwner].add(vault)) revert Errors.ProxyCreationFailed();
+        if (!_allVaults.add(vault)) revert Errors.ProxyCreationFailed(vaultImplementation);
+        if (!_ownerVaults[vaultOwner].add(vault))
+            revert Errors.ProxyCreationFailed(vaultImplementation);
 
         emit VaultCreated(vaultOwner, vault);
     }
@@ -190,7 +193,7 @@ contract VaultFactory is
      * @param _newImplementation Address of the new implementation
      */
     function updateImplementation(address _newImplementation) external onlyOwner whenNotPaused {
-        if (_newImplementation == address(0)) revert Errors.InvalidAddress();
+        if (_newImplementation == address(0)) revert Errors.InvalidAddress(_newImplementation);
         vaultImplementation = _newImplementation;
         emit ImplementationUpdated(_newImplementation);
     }
@@ -200,7 +203,7 @@ contract VaultFactory is
      * @param _newWhitelist Address of the new whitelist
      */
     function updateWhitelist(address _newWhitelist) external onlyOwner whenNotPaused {
-        if (_newWhitelist == address(0)) revert Errors.InvalidAddress();
+        if (_newWhitelist == address(0)) revert Errors.InvalidAddress(_newWhitelist);
         tokenWhitelist = TokenWhitelist(_newWhitelist);
         emit WhitelistUpdated(_newWhitelist);
     }
@@ -224,7 +227,8 @@ contract VaultFactory is
         address vaultOwner,
         uint256 index
     ) external view returns (address) {
-        if (index >= _ownerVaults[vaultOwner].length()) revert Errors.InvalidLimits();
+        if (index >= _ownerVaults[vaultOwner].length())
+            revert Errors.InvalidLimits(index, _ownerVaults[vaultOwner].length());
         return _ownerVaults[vaultOwner].at(index);
     }
 
@@ -328,7 +332,7 @@ contract VaultFactory is
         address newVault,
         bool migrateEth
     ) external nonReentrant onlyOwner {
-        if (!_allVaults.contains(oldVault)) revert Errors.InvalidVault();
+        if (!_allVaults.contains(oldVault)) revert Errors.InvalidVault(oldVault);
 
         Vault vault = Vault(payable(oldVault));
 
@@ -343,14 +347,14 @@ contract VaultFactory is
 
         // If a new vault is specified and migration is requested
         if (newVault != address(0) && migrateEth) {
-            if (!_allVaults.contains(newVault)) revert Errors.InvalidVault();
+            if (!_allVaults.contains(newVault)) revert Errors.InvalidVault(newVault);
 
             // Get the ETH balance of the old vault
             uint256 ethBalance = oldVault.balance;
 
             if (ethBalance > 0) {
-                // Withdraw ETH from old vault to new vault
-                vault.sendEth(newVault, ethBalance);
+                // Transfer ETH from old vault to new vault
+                vault.sendEth(IVault.EthParams({ amount: ethBalance, recipient: newVault }));
             }
         }
 
@@ -368,7 +372,7 @@ contract VaultFactory is
         address[] calldata vaults,
         address newWhitelist
     ) external onlyOwner returns (uint256 successCount) {
-        if (newWhitelist == address(0)) revert Errors.InvalidAddress();
+        if (newWhitelist == address(0)) revert Errors.InvalidAddress(newWhitelist);
 
         // Verify the new whitelist is valid
         TokenWhitelist whitelist = TokenWhitelist(newWhitelist);
@@ -376,7 +380,7 @@ contract VaultFactory is
         try whitelist.owner() returns (address) {
             // Valid whitelist contract
         } catch {
-            revert Errors.InvalidAddress();
+            revert Errors.InvalidAddress(address(0));
         }
 
         successCount = 0;
@@ -405,7 +409,7 @@ contract VaultFactory is
         address[] calldata vaults,
         address newOwner
     ) external onlyOwner returns (uint256 successCount) {
-        if (newOwner == address(0)) revert Errors.InvalidAddress();
+        if (newOwner == address(0)) revert Errors.InvalidAddress(address(0));
 
         successCount = 0;
         for (uint256 i = 0; i < vaults.length; i++) {
@@ -519,7 +523,8 @@ contract VaultFactory is
         if (totalEthNeeded == 0) return 0;
 
         // If not enough ETH is available, revert
-        if (totalAvailableEth < totalEthNeeded) revert Errors.InsufficientBalance();
+        if (totalAvailableEth < totalEthNeeded)
+            revert Errors.InsufficientBalance(address(this), totalAvailableEth, totalEthNeeded);
 
         // Start moving ETH from source to target vaults
         totalMoved = VaultUtils.moveEthBetweenVaults(
@@ -547,17 +552,18 @@ contract VaultFactory is
         uint256[] calldata targetBalances
     ) private view {
         // Validate input array lengths
-        if (targetVaults.length != targetBalances.length) revert Errors.InvalidLimits();
-        if (sourceVaults.length == 0 || targetVaults.length == 0) revert Errors.InvalidLimits();
+        if (targetVaults.length != targetBalances.length)
+            revert Errors.InvalidLimits(targetVaults.length, targetBalances.length);
+        if (sourceVaults.length == 0 || targetVaults.length == 0) revert Errors.InvalidLimits(0, 1);
 
         // Validate that all source vaults exist in our registry
         for (uint256 i = 0; i < sourceVaults.length; i++) {
-            if (!_allVaults.contains(sourceVaults[i])) revert Errors.InvalidVault();
+            if (!_allVaults.contains(sourceVaults[i])) revert Errors.InvalidVault(sourceVaults[i]);
         }
 
         // Validate that all target vaults exist in our registry
         for (uint256 i = 0; i < targetVaults.length; i++) {
-            if (!_allVaults.contains(targetVaults[i])) revert Errors.InvalidVault();
+            if (!_allVaults.contains(targetVaults[i])) revert Errors.InvalidVault(targetVaults[i]);
         }
     }
 

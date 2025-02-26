@@ -219,22 +219,30 @@ describe("TokenWhitelist", function () {
       await tokenWhitelist.addToken(await mockToken3.getAddress());
 
       // Get first page (2 tokens)
-      const page1 = await tokenWhitelist.getWhitelistedTokensPage(0, 2);
+      const page1 = await tokenWhitelist.getWhitelistedTokensPage({
+        offset: 0,
+        limit: 2,
+      });
       expect(page1.length).to.equal(2);
       expect(page1[0]).to.equal(await mockToken1.getAddress());
       expect(page1[1]).to.equal(await mockToken2.getAddress());
 
       // Get second page (1 token)
-      const page2 = await tokenWhitelist.getWhitelistedTokensPage(2, 2);
+      const page2 = await tokenWhitelist.getWhitelistedTokensPage({
+        offset: 2,
+        limit: 2,
+      });
       expect(page2.length).to.equal(1);
       expect(page2[0]).to.equal(await mockToken3.getAddress());
     });
 
     it("should revert when requesting page with invalid offset", async function () {
-      await expect(tokenWhitelist.getWhitelistedTokensPage(3, 1)).to.be.revertedWithCustomError(
-        tokenWhitelist,
-        "InvalidLimits"
-      );
+      await expect(
+        tokenWhitelist.getWhitelistedTokensPage({
+          offset: 3,
+          limit: 1,
+        })
+      ).to.be.revertedWithCustomError(tokenWhitelist, "InvalidLimits");
     });
   });
 
@@ -293,11 +301,13 @@ describe("TokenWhitelist", function () {
       gasStation = (await upgrades.deployProxy(
         GasStationFactory,
         [
-          await mockToken1.getAddress(),
-          await mockPriceFeed.getAddress(),
-          MIN_DEPOSIT,
-          MAX_DEPOSIT,
-          await vaultFactory.getAddress(),
+          {
+            defaultToken: await mockToken1.getAddress(),
+            defaultPriceFeed: await mockPriceFeed.getAddress(),
+            minDepositAmount: MIN_DEPOSIT,
+            maxDepositAmount: MAX_DEPOSIT,
+            vaultFactory: await vaultFactory.getAddress(),
+          },
         ],
         {
           initializer: "initialize",
@@ -386,9 +396,11 @@ describe("TokenWhitelist", function () {
       const receiverBalanceBefore = await ethers.provider.getBalance(receiverAddress);
 
       // Exchange tokens for ETH, sending to otherUser instead of back to user
-      await gasStation
-        .connect(user)
-        .exchange(await mockToken1.getAddress(), depositAmount, receiverAddress);
+      await gasStation.connect(user).exchange({
+        token: await mockToken1.getAddress(),
+        amount: depositAmount,
+        destination: receiverAddress,
+      });
 
       const receiverBalanceAfter = await ethers.provider.getBalance(receiverAddress);
 
@@ -447,9 +459,11 @@ describe("TokenWhitelist", function () {
 
       // This should fail because the token is no longer supported
       await expect(
-        gasStation
-          .connect(user)
-          .exchange(await mockToken1.getAddress(), depositAmount, await user.getAddress())
+        gasStation.connect(user).exchange({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          destination: await user.getAddress(),
+        })
       ).to.be.revertedWithCustomError(gasStation, "TokenNotSupported");
     });
   });
@@ -612,15 +626,24 @@ describe("TokenWhitelist", function () {
       console.log(`Successfully added ${finalCount} tokens out of ${tokens.length}`);
 
       // Test pagination with various page sizes
-      const smallPage = await tokenWhitelist.getWhitelistedTokensPage(0, 5);
+      const smallPage = await tokenWhitelist.getWhitelistedTokensPage({
+        offset: 0,
+        limit: 5,
+      });
       expect(smallPage.length).to.equal(5);
 
-      const mediumPage = await tokenWhitelist.getWhitelistedTokensPage(5, 10);
+      const mediumPage = await tokenWhitelist.getWhitelistedTokensPage({
+        offset: 5,
+        limit: 10,
+      });
       expect(mediumPage.length).to.equal(10);
 
       // If we have at least 15 tokens, test a larger page
       if (finalCount >= 15) {
-        const largePage = await tokenWhitelist.getWhitelistedTokensPage(0, 15);
+        const largePage = await tokenWhitelist.getWhitelistedTokensPage({
+          offset: 0,
+          limit: 15,
+        });
         expect(largePage.length).to.equal(15);
       }
 
@@ -693,10 +716,12 @@ describe("TokenWhitelist", function () {
       await tokenWhitelist.getWhitelistedTokenCount();
 
       // When the list is empty, even offset 0 will cause a revert because 0 >= 0
-      await expect(tokenWhitelist.getWhitelistedTokensPage(0, 5)).to.be.revertedWithCustomError(
-        tokenWhitelist,
-        "InvalidLimits"
-      );
+      await expect(
+        tokenWhitelist.getWhitelistedTokensPage({
+          offset: 0,
+          limit: 5,
+        })
+      ).to.be.revertedWithCustomError(tokenWhitelist, "InvalidLimits");
 
       // Add some tokens
       await tokenWhitelist.addToken(await mockToken1.getAddress());
@@ -704,26 +729,39 @@ describe("TokenWhitelist", function () {
       await tokenWhitelist.getWhitelistedTokenCount();
 
       // Test with limit = 0
-      const zeroLimitPage = await tokenWhitelist.getWhitelistedTokensPage(0, 0);
+      const zeroLimitPage = await tokenWhitelist.getWhitelistedTokensPage({
+        offset: 0,
+        limit: 0,
+      });
       expect(zeroLimitPage.length).to.equal(0);
 
       // Test with offset > count
-      await expect(tokenWhitelist.getWhitelistedTokensPage(3, 1)).to.be.revertedWithCustomError(
-        tokenWhitelist,
-        "InvalidLimits"
-      );
+      await expect(
+        tokenWhitelist.getWhitelistedTokensPage({
+          offset: 3,
+          limit: 1,
+        })
+      ).to.be.revertedWithCustomError(tokenWhitelist, "InvalidLimits");
 
       // Test with offset = count
-      await expect(tokenWhitelist.getWhitelistedTokensPage(2, 1)).to.be.revertedWithCustomError(
-        tokenWhitelist,
-        "InvalidLimits"
-      );
+      await expect(
+        tokenWhitelist.getWhitelistedTokensPage({
+          offset: 2,
+          limit: 1,
+        })
+      ).to.be.revertedWithCustomError(tokenWhitelist, "InvalidLimits");
 
       // Test with valid pagination
-      const validPage = await tokenWhitelist.getWhitelistedTokensPage(0, 2);
+      const validPage = await tokenWhitelist.getWhitelistedTokensPage({
+        offset: 0,
+        limit: 2,
+      });
       expect(validPage.length).to.equal(2);
 
-      const partialPage = await tokenWhitelist.getWhitelistedTokensPage(1, 2);
+      const partialPage = await tokenWhitelist.getWhitelistedTokensPage({
+        offset: 1,
+        limit: 2,
+      });
       expect(partialPage.length).to.equal(1);
     });
   });

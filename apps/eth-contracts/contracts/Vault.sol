@@ -8,6 +8,7 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 import { IVault } from "./interfaces/IVault.sol";
 import { ITokenWhitelist } from "./interfaces/ITokenWhitelist.sol";
 import { Errors } from "./libraries/Errors.sol";
@@ -15,6 +16,7 @@ import { Errors } from "./libraries/Errors.sol";
 /**
  * @title Vault
  * @dev Contract for managing user funds
+ * Optimized for gas efficiency with calldata and storage optimizations
  */
 contract Vault is
     IVault,
@@ -26,25 +28,41 @@ contract Vault is
 {
     using SafeERC20 for IERC20;
 
-    // State variables
+    // ======================================================
+    // State Variables
+    // ======================================================
+
+    // @dev Token whitelist contract address
     address public tokenWhitelist;
+
+    // @dev Gas station contract address
     address public gasStation;
 
-    // User balances mapping: user => token => amount
+    // @dev User balances mapping: user => token => amount
     mapping(address => mapping(address => uint256)) private _balances;
 
-    // Total deposits per token
+    // @dev Total deposits per token
     mapping(address => uint256) private _totalDeposits;
 
+    // ======================================================
     // Modifiers
+    // ======================================================
+
+    /**
+     * @dev Modifier to restrict access to gas station only
+     */
     modifier onlyGasStation() {
-        if (msg.sender != gasStation) revert Errors.NotGasStation();
+        if (msg.sender != gasStation) revert Errors.NotGasStation(msg.sender, gasStation);
         _;
     }
 
+    /**
+     * @dev Modifier to check if token is whitelisted
+     * @param token The token address to check
+     */
     modifier onlyWhitelistedToken(address token) {
         if (token != address(0) && !ITokenWhitelist(tokenWhitelist).isTokenWhitelisted(token))
-            revert Errors.TokenNotWhitelisted();
+            revert Errors.TokenNotWhitelisted(token);
         _;
     }
 
@@ -55,18 +73,17 @@ contract Vault is
 
     /**
      * @dev Initialize the contract
-     * @param owner_ The owner of the contract
-     * @param whitelist_ The token whitelist contract
+     * @param params The initialization parameters
      */
-    function initialize(address owner_, address whitelist_) external initializer {
-        __Ownable_init(owner_);
+    function initialize(InitParams calldata params) external initializer {
+        __Ownable_init(params.owner);
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
 
-        if (whitelist_ == address(0)) revert Errors.InvalidAddress();
-        tokenWhitelist = whitelist_;
-        gasStation = owner_; // Set gasStation to owner initially
+        if (params.whitelist == address(0)) revert Errors.InvalidAddress(params.whitelist);
+        tokenWhitelist = params.whitelist;
+        gasStation = params.owner; // Set gasStation to owner initially
     }
 
     /**
@@ -74,7 +91,7 @@ contract Vault is
      * @param _whitelist The token whitelist contract
      */
     function setTokenWhitelist(address _whitelist) external onlyOwner {
-        if (_whitelist == address(0)) revert Errors.InvalidAddress();
+        if (_whitelist == address(0)) revert Errors.InvalidAddress(_whitelist);
         tokenWhitelist = _whitelist;
         emit WhitelistSet(_whitelist);
     }
@@ -84,7 +101,7 @@ contract Vault is
      * @param _gasStation The gas station contract
      */
     function setGasStation(address _gasStation) external onlyOwner {
-        if (_gasStation == address(0)) revert Errors.InvalidAddress();
+        if (_gasStation == address(0)) revert Errors.InvalidAddress(_gasStation);
         gasStation = _gasStation;
     }
 
@@ -94,91 +111,123 @@ contract Vault is
     function depositEth() external payable nonReentrant whenNotPaused {
         if (msg.value == 0) revert Errors.ZeroAmount();
 
-        // Update balances
-        _balances[msg.sender][address(0)] += msg.value;
-        _totalDeposits[address(0)] += msg.value;
+        // Update balances in a single storage operation
+        address sender = msg.sender;
+        uint256 value = msg.value;
 
-        emit Deposited(msg.sender, address(0), msg.value);
+        // Cache the current balance to avoid multiple storage reads
+        uint256 currentBalance = _balances[sender][address(0)];
+        uint256 newBalance = currentBalance + value;
+
+        // Update user balance
+        _balances[sender][address(0)] = newBalance;
+
+        // Update total deposits
+        _totalDeposits[address(0)] += value;
+
+        emit Deposited(sender, address(0), value);
     }
 
     /**
      * @dev Deposit tokens into the vault
-     * @param token The token to deposit
-     * @param amount The amount to deposit
+     * @param params The token parameters
      */
     function depositToken(
-        address token,
-        uint256 amount
-    ) external nonReentrant whenNotPaused onlyWhitelistedToken(token) {
-        if (amount == 0) revert Errors.ZeroAmount();
+        TokenParams calldata params
+    ) external nonReentrant whenNotPaused onlyWhitelistedToken(params.token) {
+        if (params.amount == 0) revert Errors.ZeroAmount();
+
+        address sender = msg.sender;
+        address token = params.token;
+        uint256 amount = params.amount;
 
         // Transfer tokens from sender to vault
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        IERC20(token).safeTransferFrom(sender, address(this), amount);
 
-        // Update balances
-        _balances[msg.sender][token] += amount;
+        // Cache the current balance to avoid multiple storage reads
+        uint256 currentBalance = _balances[sender][token];
+        uint256 newBalance = currentBalance + amount;
+
+        // Update user balance
+        _balances[sender][token] = newBalance;
+
+        // Update total deposits
         _totalDeposits[token] += amount;
 
-        emit Deposited(msg.sender, token, amount);
+        emit Deposited(sender, token, amount);
     }
 
     /**
      * @dev Withdraw ETH from the vault
-     * @param amount The amount to withdraw
-     * @param to The address to withdraw to
+     * @param params The ETH parameters
      */
-    function withdrawEth(uint256 amount, address to) external onlyOwner nonReentrant whenNotPaused {
-        if (amount == 0) revert Errors.ZeroAmount();
-        if (_balances[msg.sender][address(0)] < amount) revert Errors.InsufficientBalance();
+    function withdrawEth(EthParams calldata params) external onlyOwner nonReentrant whenNotPaused {
+        if (params.amount == 0) revert Errors.ZeroAmount();
+
+        address sender = msg.sender;
+        uint256 amount = params.amount;
+        address recipient = params.recipient;
+
+        // Cache the current balance to avoid multiple storage reads
+        uint256 currentBalance = _balances[sender][address(0)];
+
+        if (currentBalance < amount)
+            revert Errors.InsufficientBalance(sender, currentBalance, amount);
 
         // Update balances
-        _balances[msg.sender][address(0)] -= amount;
+        _balances[sender][address(0)] = currentBalance - amount;
         _totalDeposits[address(0)] -= amount;
 
         // Transfer ETH
-        (bool success, ) = to.call{ value: amount }("");
-        if (!success) revert Errors.TransferFailed();
+        (bool success, ) = recipient.call{ value: amount }("");
+        if (!success) revert Errors.TransferFailed(address(0), address(this), recipient, amount);
 
-        emit Withdrawn(msg.sender, address(0), amount);
+        emit Withdrawn(sender, address(0), amount);
     }
 
     /**
      * @dev Withdraw tokens from the vault
-     * @param token The token to withdraw
-     * @param amount The amount to withdraw
-     * @param to The address to withdraw to
+     * @param params The token parameters
      */
     function withdrawToken(
-        address token,
-        uint256 amount,
-        address to
-    ) external onlyOwner nonReentrant whenNotPaused onlyWhitelistedToken(token) {
-        if (amount == 0) revert Errors.ZeroAmount();
-        if (_balances[msg.sender][token] < amount) revert Errors.InsufficientBalance();
+        TokenParams calldata params
+    ) external onlyOwner nonReentrant whenNotPaused onlyWhitelistedToken(params.token) {
+        if (params.amount == 0) revert Errors.ZeroAmount();
+
+        address sender = msg.sender;
+        address token = params.token;
+        uint256 amount = params.amount;
+        address recipient = params.recipient;
+
+        // Cache the current balance to avoid multiple storage reads
+        uint256 currentBalance = _balances[sender][token];
+
+        if (currentBalance < amount)
+            revert Errors.InsufficientBalance(sender, currentBalance, amount);
 
         // Update balances
-        _balances[msg.sender][token] -= amount;
+        _balances[sender][token] = currentBalance - amount;
         _totalDeposits[token] -= amount;
 
         // Transfer tokens
-        IERC20(token).safeTransfer(to, amount);
+        IERC20(token).safeTransfer(recipient, amount);
 
-        emit Withdrawn(msg.sender, token, amount);
+        emit Withdrawn(sender, token, amount);
     }
 
     /**
      * @dev Send ETH to a destination
-     * @param destination The destination to send ETH to
-     * @param amount The amount to send
+     * @param params The ETH parameters
      */
-    function sendEth(address destination, uint256 amount) external onlyGasStation nonReentrant {
-        if (address(this).balance < amount) revert Errors.InsufficientBalance();
+    function sendEth(EthParams calldata params) external onlyGasStation nonReentrant {
+        uint256 balance = address(this).balance;
+        if (balance < params.amount)
+            revert Errors.InsufficientBalance(address(this), balance, params.amount);
 
-        // Perform the ETH transfer
-        (bool success, ) = destination.call{ value: amount }("");
-        if (!success) revert Errors.TransferFailed();
+        // Use Address.sendValue instead of low-level call
+        Address.sendValue(payable(params.recipient), params.amount);
 
-        emit EthSent(destination, amount);
+        emit EthSent(params.recipient, params.amount);
     }
 
     /**
@@ -199,30 +248,25 @@ contract Vault is
 
     /**
      * @dev Recover tokens in case of emergency
-     * @param token The token to recover
-     * @param amount The amount to recover
-     * @param to The address to recover to
+     * @param params The token parameters
      */
-    function emergencyRecoverToken(
-        address token,
-        uint256 amount,
-        address to
-    ) external onlyOwner nonReentrant {
+    function emergencyRecoverToken(TokenParams calldata params) external onlyOwner nonReentrant {
         if (!paused()) revert Errors.ExpectedPause();
-        IERC20(token).safeTransfer(to, amount);
-        emit EmergencyRecovery(token, amount, to);
+        IERC20(params.token).safeTransfer(params.recipient, params.amount);
+        emit EmergencyRecovery(params.token, params.amount, params.recipient);
     }
 
     /**
      * @dev Recover ETH in case of emergency
-     * @param amount The amount to recover
-     * @param to The address to recover to
+     * @param params The ETH parameters
      */
-    function emergencyRecoverEth(uint256 amount, address to) external onlyOwner nonReentrant {
+    function emergencyRecoverEth(EthParams calldata params) external onlyOwner nonReentrant {
         if (!paused()) revert Errors.ExpectedPause();
-        (bool success, ) = to.call{ value: amount }("");
-        if (!success) revert Errors.TransferFailed();
-        emit EmergencyRecovery(address(0), amount, to);
+
+        // Use Address.sendValue instead of low-level call
+        Address.sendValue(payable(params.recipient), params.amount);
+
+        emit EmergencyRecovery(address(0), params.amount, params.recipient);
     }
 
     /**

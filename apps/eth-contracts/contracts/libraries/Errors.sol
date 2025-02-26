@@ -8,83 +8,85 @@ pragma solidity ^0.8.28;
 library Errors {
     // Common errors
     //@dev Invalid address
-    error InvalidAddress();
+    error InvalidAddress(address addr);
     //@dev Zero amount
     error ZeroAmount();
     //@dev Insufficient balance
-    error InsufficientBalance();
+    error InsufficientBalance(address account, uint256 available, uint256 required);
     //@dev Invalid limits
-    error InvalidLimits();
+    error InvalidLimits(uint256 provided, uint256 max);
     //@dev Unauthorized access
-    error UnauthorizedAccess();
+    error UnauthorizedAccess(address caller, address required);
     //@dev Batch size too large
-    error BatchSizeTooLarge();
+    error BatchSizeTooLarge(uint256 size, uint256 maxSize);
     //@dev Invalid amount
-    error InvalidAmount();
+    error InvalidAmount(uint256 amount);
     //@dev Invalid parameters
-    error InvalidParameters();
+    error InvalidParameters(string reason);
     //@dev Update too frequent
-    error UpdateTooFrequent();
+    error UpdateTooFrequent(uint256 lastUpdate, uint256 currentTime, uint256 minDelay);
 
     // Token related errors
     //@dev Token not supported
-    error TokenNotSupported();
+    error TokenNotSupported(address token);
     //@dev Token not whitelisted
-    error TokenNotWhitelisted();
+    error TokenNotWhitelisted(address token);
     //@dev Token addition failed
-    error TokenAdditionFailed();
+    error TokenAdditionFailed(address token);
     //@dev Token removal failed
-    error TokenRemovalFailed();
+    error TokenRemovalFailed(address token);
     //@dev Invalid token contract (not ERC20 compliant)
-    error InvalidTokenContract();
+    error InvalidTokenContract(address token);
 
     // Price feed related errors
     //@dev Invalid ETH price
-    error InvalidEthPrice();
+    error InvalidEthPrice(int256 price);
     //@dev Stale price
-    error StalePrice();
+    error StalePrice(uint256 timestamp, uint256 currentTime, uint256 maxDelay);
     //@dev Price overflow
-    error PriceOverflow();
+    error PriceOverflow(uint256 price);
     //@dev Invalid ETH round ID
-    error InvalidEthRoundId();
+    error InvalidEthRoundId(uint80 roundId);
 
     // Vault related errors
     //@dev Vault not found
     error VaultNotFound();
     //@dev Invalid vault
-    error InvalidVault();
+    error InvalidVault(address vault);
     //@dev Vault balance distribution needed
-    error VaultBalanceDistributionNeeded();
+    error VaultBalanceDistributionNeeded(uint256 totalBalance, uint256 required);
     //@dev Vault limit reached
-    error VaultLimitReached();
+    error VaultLimitReached(uint256 count, uint256 max);
     //@dev Vault not empty
-    error VaultNotEmpty();
+    error VaultNotEmpty(address vault, uint256 balance);
     //@dev Vault already exists
-    error VaultAlreadyExists();
+    error VaultAlreadyExists(address owner, address vault);
     //@dev Proxy creation failed
-    error ProxyCreationFailed();
+    error ProxyCreationFailed(address implementation);
     //@dev Max vaults reached
-    error MaxVaultsReached();
+    error MaxVaultsReached(uint256 max);
     //@dev Not gas station
-    error NotGasStation();
+    error NotGasStation(address caller, address gasStation);
 
     // Transaction related errors
     //@dev Amount below minimum
-    error AmountBelowMinimum();
+    error AmountBelowMinimum(uint256 amount, uint256 minimum);
     //@dev Amount above maximum
-    error AmountAboveMaximum();
+    error AmountAboveMaximum(uint256 amount, uint256 maximum);
     //@dev Rate limit exceeded
-    error RateLimitExceeded();
+    error RateLimitExceeded(uint256 count, uint256 max);
     //@dev ETH transfer failed
-    error EthTransferFailed();
+    error EthTransferFailed(address to, uint256 amount);
     //@dev Direct deposit not allowed
     error DirectDepositNotAllowed();
     //@dev Invalid destination
-    error InvalidDestination();
+    error InvalidDestination(address destination);
     //@dev Expired deadline
-    error ExpiredDeadline();
+    error ExpiredDeadline(uint256 deadline, uint256 currentTime);
     //@dev Transfer failed
-    error TransferFailed();
+    error TransferFailed(address token, address from, address to, uint256 amount);
+    //@dev Invalid signature format or length
+    error InvalidSignature(bytes signature);
 
     // Emergency related errors
     //@dev Not in emergency mode
@@ -93,14 +95,4 @@ library Errors {
     error ContractPaused();
     //@dev Expected contract to be paused
     error ExpectedPause();
-
-    // Gas optimization related errors
-    //@dev Gas price too low
-    error GasPriceTooLow();
-    //@dev Gas price too high
-    error GasPriceTooHigh();
-    //@dev EIP-1559 not supported
-    error EIP1559NotSupported();
-    //@dev Gas optimizer not set
-    error GasOptimizerNotSet();
 }

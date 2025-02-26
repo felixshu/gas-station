@@ -72,7 +72,7 @@ describe("Vault Contract Tests", function () {
     });
 
     /**
-     * @notice Test that verifies the initialization issue in the Vault contract
+     * @notice Test that verifies the initialization issue in the original Vault contract
      * @dev This test attempts to deploy the Vault contract and expects it to fail
      * with a specific error message related to missing ReentrancyGuard initialization
      */
@@ -83,7 +83,7 @@ describe("Vault Contract Tests", function () {
       try {
         const vault = await upgrades.deployProxy(
           VaultFactory,
-          [await owner.getAddress(), await tokenWhitelist.getAddress()],
+          [{ owner: await owner.getAddress(), whitelist: await tokenWhitelist.getAddress() }],
           {
             initializer: "initialize",
             kind: "uups",
@@ -143,14 +143,15 @@ describe("Vault Contract Tests", function () {
         "Modify the initialize function in Vault.sol to include ReentrancyGuard initialization:"
       );
       console.log(`
-      function initialize(address owner_, address whitelist_) public initializer {
-          __Ownable_init(owner_);
+      function initialize(InitParams calldata params) public initializer {
+          __Ownable_init(params.owner);
           __ReentrancyGuard_init(); // Add this line
           __Pausable_init();
-          gasStation = owner_;
+          __UUPSUpgradeable_init();
 
-          if (whitelist_ == address(0)) revert Errors.InvalidAddress();
-          tokenWhitelist = TokenWhitelist(whitelist_);
+          if (params.whitelist == address(0)) revert Errors.InvalidAddress();
+          tokenWhitelist = params.whitelist;
+          gasStation = params.owner; // Set gasStation to owner initially
       }
       `);
 
@@ -223,7 +224,7 @@ describe("Vault Contract Tests", function () {
       VaultFactory = await ethers.getContractFactory("Vault");
       vault = (await upgrades.deployProxy(
         VaultFactory,
-        [await owner.getAddress(), await tokenWhitelist.getAddress()],
+        [{ owner: await owner.getAddress(), whitelist: await tokenWhitelist.getAddress() }],
         {
           initializer: "initialize",
           kind: "uups",
@@ -247,16 +248,26 @@ describe("Vault Contract Tests", function () {
     it("should prevent initialization with zero address for whitelist", async function () {
       const newVaultFactory = await ethers.getContractFactory("Vault");
       await expect(
-        upgrades.deployProxy(newVaultFactory, [await owner.getAddress(), ethers.ZeroAddress], {
-          initializer: "initialize",
-          kind: "uups",
-        })
-      ).to.be.revertedWithCustomError(vault, "InvalidAddress");
+        upgrades.deployProxy(
+          newVaultFactory,
+          [{ owner: await owner.getAddress(), whitelist: ethers.ZeroAddress }],
+          {
+            initializer: "initialize",
+            kind: "uups",
+          }
+        )
+      )
+        .to.be.revertedWithCustomError(vault, "InvalidAddress")
+        .withArgs(ethers.ZeroAddress);
     });
 
     it("should prevent double initialization", async function () {
-      await expect(vault.initialize(await owner.getAddress(), await tokenWhitelist.getAddress())).to
-        .be.reverted;
+      await expect(
+        vault.initialize({
+          owner: await owner.getAddress(),
+          whitelist: await tokenWhitelist.getAddress(),
+        })
+      ).to.be.reverted;
     });
 
     it("should start in unpaused state", async function () {
@@ -267,7 +278,11 @@ describe("Vault Contract Tests", function () {
       // Try to call a function with nonReentrant modifier
       // This will pass if ReentrancyGuard is properly initialized
       await expect(
-        vault.depositToken(await mockToken1.getAddress(), 0)
+        vault.depositToken({
+          token: await mockToken1.getAddress(),
+          amount: 0,
+          recipient: ethers.ZeroAddress,
+        })
       ).to.be.revertedWithCustomError(vault, "ZeroAmount");
     });
   });
@@ -287,7 +302,7 @@ describe("Vault Contract Tests", function () {
       VaultFactory = await ethers.getContractFactory("Vault");
       vault = (await upgrades.deployProxy(
         VaultFactory,
-        [await owner.getAddress(), await tokenWhitelist.getAddress()],
+        [{ owner: await owner.getAddress(), whitelist: await tokenWhitelist.getAddress() }],
         {
           initializer: "initialize",
           kind: "uups",
@@ -331,9 +346,9 @@ describe("Vault Contract Tests", function () {
       });
 
       it("should prevent updating gasStation to zero address", async function () {
-        await expect(
-          vault.connect(owner).setGasStation(ethers.ZeroAddress)
-        ).to.be.revertedWithCustomError(vault, "InvalidAddress");
+        await expect(vault.connect(owner).setGasStation(ethers.ZeroAddress))
+          .to.be.revertedWithCustomError(vault, "InvalidAddress")
+          .withArgs(ethers.ZeroAddress);
       });
     });
 
@@ -388,7 +403,7 @@ describe("Vault Contract Tests", function () {
       VaultFactory = await ethers.getContractFactory("Vault");
       vault = (await upgrades.deployProxy(
         VaultFactory,
-        [await owner.getAddress(), await tokenWhitelist.getAddress()],
+        [{ owner: await owner.getAddress(), whitelist: await tokenWhitelist.getAddress() }],
         {
           initializer: "initialize",
           kind: "uups",
@@ -403,7 +418,13 @@ describe("Vault Contract Tests", function () {
 
     describe("Deposit Tests", function () {
       it("should accept deposits of whitelisted tokens", async function () {
-        await expect(vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount))
+        await expect(
+          vault.connect(user).depositToken({
+            token: await mockToken1.getAddress(),
+            amount: depositAmount,
+            recipient: ethers.ZeroAddress,
+          })
+        )
           .to.emit(vault, "Deposited")
           .withArgs(await user.getAddress(), await mockToken1.getAddress(), depositAmount);
 
@@ -420,13 +441,23 @@ describe("Vault Contract Tests", function () {
         await nonWhitelistedToken.connect(user).approve(await vault.getAddress(), depositAmount);
 
         await expect(
-          vault.connect(user).depositToken(await nonWhitelistedToken.getAddress(), depositAmount)
-        ).to.be.revertedWithCustomError(vault, "TokenNotWhitelisted");
+          vault.connect(user).depositToken({
+            token: await nonWhitelistedToken.getAddress(),
+            amount: depositAmount,
+            recipient: ethers.ZeroAddress,
+          })
+        )
+          .to.be.revertedWithCustomError(vault, "TokenNotWhitelisted")
+          .withArgs(await nonWhitelistedToken.getAddress());
       });
 
       it("should reject deposits of zero amount", async function () {
         await expect(
-          vault.connect(user).depositToken(await mockToken1.getAddress(), 0)
+          vault.connect(user).depositToken({
+            token: await mockToken1.getAddress(),
+            amount: 0,
+            recipient: ethers.ZeroAddress,
+          })
         ).to.be.revertedWithCustomError(vault, "ZeroAmount");
       });
 
@@ -434,13 +465,22 @@ describe("Vault Contract Tests", function () {
         const userBalance = await mockToken1.balanceOf(await user.getAddress());
         const tooMuch = userBalance + 1n;
 
-        await expect(vault.connect(user).depositToken(await mockToken1.getAddress(), tooMuch)).to.be
-          .reverted;
+        await expect(
+          vault.connect(user).depositToken({
+            token: await mockToken1.getAddress(),
+            amount: tooMuch,
+            recipient: ethers.ZeroAddress,
+          })
+        ).to.be.reverted;
       });
 
       it("should track individual user balances correctly", async function () {
         // First user deposits
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
         expect(
           await vault.balances(await user.getAddress(), await mockToken1.getAddress())
         ).to.equal(depositAmount);
@@ -448,7 +488,11 @@ describe("Vault Contract Tests", function () {
         // Second user deposits
         await mockToken1.mint(await otherUser.getAddress(), depositAmount);
         await mockToken1.connect(otherUser).approve(await vault.getAddress(), depositAmount);
-        await vault.connect(otherUser).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(otherUser).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
 
         expect(
           await vault.balances(await otherUser.getAddress(), await mockToken1.getAddress())
@@ -459,7 +503,11 @@ describe("Vault Contract Tests", function () {
     describe("Withdrawal Tests", function () {
       beforeEach(async function () {
         // Setup: deposit some tokens first
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
       });
 
       it("should allow withdrawal of deposited tokens", async function () {
@@ -469,9 +517,11 @@ describe("Vault Contract Tests", function () {
         await vault.connect(owner).transferOwnership(await user.getAddress());
 
         await expect(
-          vault
-            .connect(user)
-            .withdrawToken(await mockToken1.getAddress(), depositAmount, await user.getAddress())
+          vault.connect(user).withdrawToken({
+            token: await mockToken1.getAddress(),
+            amount: depositAmount,
+            recipient: await user.getAddress(),
+          })
         )
           .to.emit(vault, "Withdrawn")
           .withArgs(await user.getAddress(), await mockToken1.getAddress(), depositAmount);
@@ -494,10 +544,12 @@ describe("Vault Contract Tests", function () {
         await vault.connect(owner).transferOwnership(await user.getAddress());
 
         await expect(
-          vault
-            .connect(user)
-            .withdrawToken(await mockToken1.getAddress(), tooMuch, await user.getAddress())
-        ).to.be.revertedWithCustomError(vault, "InsufficientBalance");
+          vault.connect(user).withdrawToken({
+            token: await mockToken1.getAddress(),
+            amount: tooMuch,
+            recipient: await user.getAddress(),
+          })
+        ).to.be.reverted;
 
         // Transfer ownership back
         await vault.connect(user).transferOwnership(await owner.getAddress());
@@ -518,9 +570,11 @@ describe("Vault Contract Tests", function () {
 
         // Execute the withdrawal of 0 tokens - should revert with ZeroAmount error
         await expect(
-          vault
-            .connect(owner)
-            .withdrawToken(await newToken.getAddress(), 0, await otherUser.getAddress())
+          vault.connect(owner).withdrawToken({
+            token: await newToken.getAddress(),
+            amount: 0,
+            recipient: await otherUser.getAddress(),
+          })
         ).to.be.revertedWithCustomError(vault, "ZeroAmount");
 
         // Verify that no tokens were actually transferred
@@ -531,19 +585,15 @@ describe("Vault Contract Tests", function () {
       });
 
       it("should prevent withdrawal from another user's balance", async function () {
-        // The withdrawToken function checks balances[msg.sender][token]
-        // When we transfer ownership to the user, they become msg.sender
-        // But they're trying to withdraw to otherUser, which doesn't affect the balance check
-
         // We need to test that a user can't withdraw tokens they don't have
         // Let's use the owner to try to withdraw tokens that belong to the user
         await expect(
-          vault.connect(owner).withdrawToken(
-            await mockToken1.getAddress(),
-            smallDepositAmount,
-            await owner.getAddress() // Owner trying to withdraw to themselves
-          )
-        ).to.be.revertedWithCustomError(vault, "InsufficientBalance");
+          vault.connect(owner).withdrawToken({
+            token: await mockToken1.getAddress(),
+            amount: smallDepositAmount,
+            recipient: await owner.getAddress(), // Owner trying to withdraw to themselves
+          })
+        ).to.be.reverted;
       });
 
       it("should handle multiple deposits and withdrawals correctly", async function () {
@@ -553,27 +603,35 @@ describe("Vault Contract Tests", function () {
         await mockToken1.connect(owner).approve(await vault.getAddress(), ethers.MaxUint256);
 
         // Make deposits from the owner's account
-        await vault.connect(owner).depositToken(await mockToken1.getAddress(), depositAmount);
-        await vault.connect(owner).depositToken(await mockToken1.getAddress(), smallDepositAmount);
+        await vault.connect(owner).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
+        await vault.connect(owner).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: smallDepositAmount,
+          recipient: ethers.ZeroAddress,
+        });
         const totalDeposit = depositAmount + smallDepositAmount;
 
         // Now the owner can withdraw their own tokens
         // Partial withdrawal
-        await vault
-          .connect(owner)
-          .withdrawToken(
-            await mockToken1.getAddress(),
-            smallDepositAmount,
-            await owner.getAddress()
-          );
+        await vault.connect(owner).withdrawToken({
+          token: await mockToken1.getAddress(),
+          amount: smallDepositAmount,
+          recipient: await owner.getAddress(),
+        });
         expect(
           await vault.balances(await owner.getAddress(), await mockToken1.getAddress())
         ).to.equal(depositAmount);
 
         // Withdraw remaining
-        await vault
-          .connect(owner)
-          .withdrawToken(await mockToken1.getAddress(), depositAmount, await owner.getAddress());
+        await vault.connect(owner).withdrawToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: await owner.getAddress(),
+        });
         expect(
           await vault.balances(await owner.getAddress(), await mockToken1.getAddress())
         ).to.equal(0);
@@ -582,10 +640,18 @@ describe("Vault Contract Tests", function () {
 
     describe("Balance Tracking Tests", function () {
       it("should track total deposits correctly", async function () {
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
         expect(await vault.totalDeposits(await mockToken1.getAddress())).to.equal(depositAmount);
 
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), smallDepositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: smallDepositAmount,
+          recipient: ethers.ZeroAddress,
+        });
         expect(await vault.totalDeposits(await mockToken1.getAddress())).to.equal(
           depositAmount + smallDepositAmount
         );
@@ -597,16 +663,18 @@ describe("Vault Contract Tests", function () {
         await mockToken1.connect(owner).approve(await vault.getAddress(), ethers.MaxUint256);
 
         // Owner deposits tokens
-        await vault.connect(owner).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(owner).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
 
         // Owner withdraws a small amount
-        await vault
-          .connect(owner)
-          .withdrawToken(
-            await mockToken1.getAddress(),
-            smallDepositAmount,
-            await owner.getAddress()
-          );
+        await vault.connect(owner).withdrawToken({
+          token: await mockToken1.getAddress(),
+          amount: smallDepositAmount,
+          recipient: await owner.getAddress(),
+        });
 
         // Check that total deposits are updated correctly
         expect(await vault.totalDeposits(await mockToken1.getAddress())).to.equal(
@@ -618,8 +686,16 @@ describe("Vault Contract Tests", function () {
         const amount1 = ethers.parseUnits("100", 18); // 18 decimals
         const amount2 = ethers.parseUnits("100", 6); // 6 decimals
 
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), amount1);
-        await vault.connect(user).depositToken(await mockToken2.getAddress(), amount2);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: amount1,
+          recipient: ethers.ZeroAddress,
+        });
+        await vault.connect(user).depositToken({
+          token: await mockToken2.getAddress(),
+          amount: amount2,
+          recipient: ethers.ZeroAddress,
+        });
 
         expect(
           await vault.balances(await user.getAddress(), await mockToken1.getAddress())
@@ -649,7 +725,7 @@ describe("Vault Contract Tests", function () {
       VaultFactory = await ethers.getContractFactory("Vault");
       vault = (await upgrades.deployProxy(
         VaultFactory,
-        [await owner.getAddress(), await tokenWhitelist.getAddress()],
+        [{ owner: await owner.getAddress(), whitelist: await tokenWhitelist.getAddress() }],
         {
           initializer: "initialize",
           kind: "uups",
@@ -669,7 +745,11 @@ describe("Vault Contract Tests", function () {
         expect(await vault.balances(ethers.ZeroAddress, ethers.ZeroAddress)).to.equal(0);
 
         // Deposit some tokens to verify the function works normally
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
         expect(
           await vault.balances(await user.getAddress(), await mockToken1.getAddress())
         ).to.equal(depositAmount);
@@ -681,15 +761,21 @@ describe("Vault Contract Tests", function () {
         expect(await vault.balances(ethers.ZeroAddress, ethers.ZeroAddress)).to.equal(0);
 
         // Deposit and withdraw some tokens to verify the function works normally
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
 
         // Transfer ownership to user to allow withdrawal
         await vault.connect(owner).transferOwnership(await user.getAddress());
 
         // Withdraw tokens
-        await vault
-          .connect(user)
-          .withdrawToken(await mockToken1.getAddress(), depositAmount, await user.getAddress());
+        await vault.connect(user).withdrawToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: await user.getAddress(),
+        });
 
         // Verify the withdrawal was successful
         expect(
@@ -707,13 +793,22 @@ describe("Vault Contract Tests", function () {
         await vault.connect(owner).emergencyPause();
 
         // Attempt to deposit
-        await expect(vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount))
-          .to.be.reverted;
+        await expect(
+          vault.connect(user).depositToken({
+            token: await mockToken1.getAddress(),
+            amount: depositAmount,
+            recipient: ethers.ZeroAddress,
+          })
+        ).to.be.reverted;
       });
 
       it("should prevent withdrawals when paused", async function () {
         // First, deposit tokens
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
 
         // Transfer ownership to user to allow withdrawal
         await vault.connect(owner).transferOwnership(await user.getAddress());
@@ -723,9 +818,11 @@ describe("Vault Contract Tests", function () {
 
         // Attempt to withdraw
         await expect(
-          vault
-            .connect(user)
-            .withdrawToken(await mockToken1.getAddress(), depositAmount, await user.getAddress())
+          vault.connect(user).withdrawToken({
+            token: await mockToken1.getAddress(),
+            amount: depositAmount,
+            recipient: await user.getAddress(),
+          })
         ).to.be.reverted;
 
         // Transfer ownership back
@@ -734,7 +831,11 @@ describe("Vault Contract Tests", function () {
 
       it("should allow emergency recovery when paused", async function () {
         // First, deposit tokens
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
 
         // Pause the contract
         await vault.connect(owner).emergencyPause();
@@ -745,13 +846,11 @@ describe("Vault Contract Tests", function () {
 
         // Recover the excess tokens
         await expect(
-          vault
-            .connect(owner)
-            .emergencyRecoverToken(
-              await mockToken1.getAddress(),
-              excessAmount,
-              await owner.getAddress()
-            )
+          vault.connect(owner).emergencyRecoverToken({
+            token: await mockToken1.getAddress(),
+            amount: excessAmount,
+            recipient: await owner.getAddress(),
+          })
         ).to.not.be.reverted;
 
         // Verify the excess tokens were recovered
@@ -760,13 +859,11 @@ describe("Vault Contract Tests", function () {
 
       it("should prevent emergency recovery when not paused", async function () {
         await expect(
-          vault
-            .connect(owner)
-            .emergencyRecoverToken(
-              await mockToken1.getAddress(),
-              depositAmount,
-              await owner.getAddress()
-            )
+          vault.connect(owner).emergencyRecoverToken({
+            token: await mockToken1.getAddress(),
+            amount: depositAmount,
+            recipient: await owner.getAddress(),
+          })
         ).to.be.revertedWithCustomError(vault, "ExpectedPause");
       });
 
@@ -778,8 +875,13 @@ describe("Vault Contract Tests", function () {
         await vault.connect(owner).emergencyUnpause();
 
         // Verify deposits work again
-        await expect(vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount))
-          .to.not.be.reverted;
+        await expect(
+          vault.connect(user).depositToken({
+            token: await mockToken1.getAddress(),
+            amount: depositAmount,
+            recipient: ethers.ZeroAddress,
+          })
+        ).to.not.be.reverted;
 
         // Verify the deposit was successful
         expect(
@@ -808,7 +910,7 @@ describe("Vault Contract Tests", function () {
       VaultFactory = await ethers.getContractFactory("Vault");
       vault = (await upgrades.deployProxy(
         VaultFactory,
-        [await owner.getAddress(), await tokenWhitelist.getAddress()],
+        [{ owner: await owner.getAddress(), whitelist: await tokenWhitelist.getAddress() }],
         {
           initializer: "initialize",
           kind: "uups",
@@ -824,20 +926,32 @@ describe("Vault Contract Tests", function () {
     describe("TokenWhitelist Interaction", function () {
       it("should reject deposits after token is removed from whitelist", async function () {
         // First, deposit tokens successfully
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), smallDepositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: smallDepositAmount,
+          recipient: ethers.ZeroAddress,
+        });
 
         // Remove token from whitelist
         await tokenWhitelist.connect(owner).removeToken(await mockToken1.getAddress());
 
         // Attempt to deposit again
         await expect(
-          vault.connect(user).depositToken(await mockToken1.getAddress(), smallDepositAmount)
+          vault.connect(user).depositToken({
+            token: await mockToken1.getAddress(),
+            amount: smallDepositAmount,
+            recipient: ethers.ZeroAddress,
+          })
         ).to.be.revertedWithCustomError(vault, "TokenNotWhitelisted");
       });
 
       it("should allow withdrawals even after token is removed from whitelist", async function () {
         // First, deposit tokens
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
 
         // Remove token from whitelist
         await tokenWhitelist.connect(owner).removeToken(await mockToken1.getAddress());
@@ -847,10 +961,14 @@ describe("Vault Contract Tests", function () {
 
         // Attempt to withdraw
         await expect(
-          vault
-            .connect(user)
-            .withdrawToken(await mockToken1.getAddress(), depositAmount, await user.getAddress())
-        ).to.be.revertedWithCustomError(vault, "TokenNotWhitelisted");
+          vault.connect(user).withdrawToken({
+            token: await mockToken1.getAddress(),
+            amount: depositAmount,
+            recipient: await user.getAddress(),
+          })
+        )
+          .to.be.revertedWithCustomError(vault, "TokenNotWhitelisted")
+          .withArgs(await mockToken1.getAddress());
 
         // Transfer ownership back
         await vault.connect(user).transferOwnership(await owner.getAddress());
@@ -872,8 +990,13 @@ describe("Vault Contract Tests", function () {
         await vault.connect(owner).setTokenWhitelist(await newWhitelist.getAddress());
 
         // Verify deposits still work with the new whitelist
-        await expect(vault.connect(user).depositToken(await mockToken1.getAddress(), depositAmount))
-          .to.not.be.reverted;
+        await expect(
+          vault.connect(user).depositToken({
+            token: await mockToken1.getAddress(),
+            amount: depositAmount,
+            recipient: ethers.ZeroAddress,
+          })
+        ).to.not.be.reverted;
 
         // Verify the deposit was successful
         expect(
@@ -889,8 +1012,16 @@ describe("Vault Contract Tests", function () {
         const amount2 = ethers.parseUnits("100", 6);
 
         // Deposit both tokens
-        await vault.connect(user).depositToken(await mockToken1.getAddress(), amount1);
-        await vault.connect(user).depositToken(await mockToken2.getAddress(), amount2);
+        await vault.connect(user).depositToken({
+          token: await mockToken1.getAddress(),
+          amount: amount1,
+          recipient: ethers.ZeroAddress,
+        });
+        await vault.connect(user).depositToken({
+          token: await mockToken2.getAddress(),
+          amount: amount2,
+          recipient: ethers.ZeroAddress,
+        });
 
         // Verify balances are tracked correctly
         expect(
@@ -904,12 +1035,16 @@ describe("Vault Contract Tests", function () {
         await vault.connect(owner).transferOwnership(await user.getAddress());
 
         // Withdraw both tokens
-        await vault
-          .connect(user)
-          .withdrawToken(await mockToken1.getAddress(), amount1, await user.getAddress());
-        await vault
-          .connect(user)
-          .withdrawToken(await mockToken2.getAddress(), amount2, await user.getAddress());
+        await vault.connect(user).withdrawToken({
+          token: await mockToken1.getAddress(),
+          amount: amount1,
+          recipient: await user.getAddress(),
+        });
+        await vault.connect(user).withdrawToken({
+          token: await mockToken2.getAddress(),
+          amount: amount2,
+          recipient: await user.getAddress(),
+        });
 
         // Verify balances are updated correctly
         expect(
@@ -939,7 +1074,11 @@ describe("Vault Contract Tests", function () {
         await feeToken.connect(user).approve(await vault.getAddress(), depositAmount);
 
         // Deposit tokens
-        await vault.connect(user).depositToken(await feeToken.getAddress(), depositAmount);
+        await vault.connect(user).depositToken({
+          token: await feeToken.getAddress(),
+          amount: depositAmount,
+          recipient: ethers.ZeroAddress,
+        });
 
         // Calculate expected amount after fee
         const expectedAmount = (depositAmount * 99n) / 100n; // 1% fee
@@ -956,9 +1095,11 @@ describe("Vault Contract Tests", function () {
         await vault.connect(owner).transferOwnership(await user.getAddress());
 
         // Withdraw tokens - but only withdraw what the vault actually has
-        await vault
-          .connect(user)
-          .withdrawToken(await feeToken.getAddress(), expectedAmount, await user.getAddress());
+        await vault.connect(user).withdrawToken({
+          token: await feeToken.getAddress(),
+          amount: expectedAmount,
+          recipient: await user.getAddress(),
+        });
 
         // Verify the user received the correct amount after fees
         // There will be another fee deduction on withdrawal

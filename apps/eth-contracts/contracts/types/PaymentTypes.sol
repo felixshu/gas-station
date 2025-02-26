@@ -6,5 +6,6 @@ import { AggregatorV3Interface } from "@chainlink/contracts/src/v0.8/shared/inte
 struct PaymentTokenConfig {
     bool isSupported;
     uint8 decimals;
-    AggregatorV3Interface priceFeed;
+    address priceFeed;
+    uint64 scalingFactor;
 }

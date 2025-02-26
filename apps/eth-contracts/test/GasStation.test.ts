@@ -65,11 +65,13 @@ describe("GasStation", function () {
     gasStation = (await upgrades.deployProxy(
       GasStationFactory,
       [
-        await mockUSDC.getAddress(),
-        await mockPriceFeed.getAddress(),
-        MIN_DEPOSIT,
-        MAX_DEPOSIT,
-        await vaultFactory.getAddress(),
+        {
+          defaultToken: await mockUSDC.getAddress(),
+          defaultPriceFeed: await mockPriceFeed.getAddress(),
+          minDepositAmount: MIN_DEPOSIT,
+          maxDepositAmount: MAX_DEPOSIT,
+          vaultFactory: await vaultFactory.getAddress(),
+        },
       ],
       {
         initializer: "initialize",
@@ -126,7 +128,7 @@ describe("GasStation", function () {
     });
     await network.provider.send("evm_mine");
 
-    await mockUSDC.connect(user).approve(await gasStation.getAddress(), depositAmount * 2n);
+    await mockUSDC.connect(user).approve(await gasStation.getAddress(), depositAmount);
   });
 
   describe("Initialization", function () {
@@ -142,11 +144,13 @@ describe("GasStation", function () {
       const GasStationFactory = await ethers.getContractFactory("GasStation");
       await expect(
         upgrades.deployProxy(GasStationFactory, [
-          ethers.ZeroAddress,
-          await mockPriceFeed.getAddress(),
-          MIN_DEPOSIT,
-          MAX_DEPOSIT,
-          await vaultFactory.getAddress(),
+          {
+            defaultToken: ethers.ZeroAddress,
+            defaultPriceFeed: await mockPriceFeed.getAddress(),
+            minDepositAmount: MIN_DEPOSIT,
+            maxDepositAmount: MAX_DEPOSIT,
+            vaultFactory: await vaultFactory.getAddress(),
+          },
         ])
       ).to.be.revertedWithCustomError(gasStation, "InvalidAddress");
     });
@@ -324,9 +328,11 @@ describe("GasStation", function () {
       );
 
       // Execute the exchange
-      const tx = await gasStation
-        .connect(user)
-        .exchange(await mockUSDC.getAddress(), depositAmount, await user.getAddress());
+      const tx = await gasStation.connect(user).exchange({
+        token: await mockUSDC.getAddress(),
+        amount: depositAmount,
+        destination: await user.getAddress(),
+      });
       await tx.wait();
 
       // Get final balances
@@ -393,17 +399,21 @@ describe("GasStation", function () {
       const vault2BalanceBefore = await ethers.provider.getBalance(vault2Address);
 
       // Execute two exchanges
-      const tx1 = await gasStation
-        .connect(user)
-        .exchange(await mockUSDC.getAddress(), depositAmount, await user.getAddress());
+      const tx1 = await gasStation.connect(user).exchange({
+        token: await mockUSDC.getAddress(),
+        amount: depositAmount,
+        destination: await user.getAddress(),
+      });
       await tx1.wait();
 
       // Mine a block to ensure the transaction is processed
       await network.provider.send("evm_mine");
 
-      const tx2 = await gasStation
-        .connect(user)
-        .exchange(await mockUSDC.getAddress(), depositAmount, await user.getAddress());
+      const tx2 = await gasStation.connect(user).exchange({
+        token: await mockUSDC.getAddress(),
+        amount: depositAmount,
+        destination: await user.getAddress(),
+      });
       await tx2.wait();
 
       // Verify the events were emitted
@@ -456,13 +466,14 @@ describe("GasStation", function () {
       expect(await gasStation.owner()).to.equal(await owner.getAddress());
       await gasStation.enableEmergencyMode();
 
+      // Test emergencyWithdrawToken
       await expect(
-        gasStation
-          .connect(owner)
-          .emergencyWithdrawToken(await mockUSDC.getAddress(), amount, await owner.getAddress())
-      )
-        .to.emit(gasStation, "EmergencyWithdrawal")
-        .withArgs(await mockUSDC.getAddress(), amount, await owner.getAddress());
+        gasStation.connect(owner).emergencyWithdrawToken({
+          token: await mockUSDC.getAddress(),
+          amount: amount,
+          to: await owner.getAddress(),
+        })
+      ).to.emit(gasStation, "EmergencyWithdrawal");
 
       expect(await mockUSDC.balanceOf(await owner.getAddress())).to.equal(amount);
     });
@@ -479,9 +490,11 @@ describe("GasStation", function () {
 
       // Try emergency withdrawal when not paused
       await expect(
-        gasStation
-          .connect(owner)
-          .emergencyWithdrawToken(await mockUSDC.getAddress(), amount, await owner.getAddress())
+        gasStation.connect(owner).emergencyWithdrawToken({
+          token: await mockUSDC.getAddress(),
+          amount: amount,
+          to: await owner.getAddress(),
+        })
       ).to.be.revertedWithCustomError(gasStation, "NotInEmergencyMode");
 
       // Debug: Check final state

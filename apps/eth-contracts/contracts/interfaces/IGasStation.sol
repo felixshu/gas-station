@@ -32,37 +32,55 @@ interface IGasStation {
         uint256 ethAmount,
         address indexed destination
     );
+    event RateLimitCheck(uint256 currentBlock, uint256 lastProcessedBlock, uint256 currentDeposits);
+    event RateLimitUpdated(uint256 blockNumber, uint256 newCount);
+
+    // ======================================================
+    // Structs
+    // ======================================================
+    struct InitParams {
+        address defaultToken;
+        address defaultPriceFeed;
+        uint128 minDepositAmount;
+        uint128 maxDepositAmount;
+        address vaultFactory;
+    }
+
+    struct WithdrawalParams {
+        address token;
+        uint256 amount;
+        address to;
+    }
+
+    struct ExchangeParams {
+        address token;
+        uint256 amount;
+        address destination;
+    }
+
+    struct PermitParams {
+        ExchangeParams exchange;
+        uint256 deadline;
+        bytes signature;
+    }
 
     // ======================================================
     // External Functions
     // ======================================================
-    function initialize(
-        address _defaultToken,
-        address _defaultPriceFeed,
-        uint256 _minDepositAmount,
-        uint256 _maxDepositAmount,
-        address _vaultFactory
-    ) external;
+    function initialize(InitParams calldata params) external;
 
     function setDefaultToken(address _newDefaultToken) external;
     function addPaymentToken(address token, address priceFeed) external;
     function removePaymentToken(address token) external;
     function getSupportedTokens() external view returns (address[] memory);
 
-    function exchange(address token, uint256 amount, address destination) external;
+    function exchange(ExchangeParams calldata params) external;
 
-    function exchangeWithPermit(
-        address token,
-        uint256 amount,
-        address destination,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external;
+    function exchangeWithPermit(PermitParams calldata params) external;
 
     function setVaultFactory(address _vaultFactory) external;
-    function emergencyWithdrawToken(address token, uint256 amount, address to) external;
+    function setVaultGasStation(address vault, address gasStation) external;
+    function emergencyWithdrawToken(WithdrawalParams calldata params) external;
     function enableEmergencyMode() external;
     function disableEmergencyMode() external;
 
