@@ -2,6 +2,57 @@
 
 A decentralized gas fee payment system that allows users to pay for Ethereum gas fees using ERC20 tokens.
 
+## Table of Contents
+- [Gas Station Smart Contracts](#gas-station-smart-contracts)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Architecture](#architecture)
+    - [Core Components](#core-components)
+      - [GasStation](#gasstation)
+      - [VaultFactory](#vaultfactory)
+      - [Vault](#vault)
+      - [TokenWhitelist](#tokenwhitelist)
+  - [Key Features](#key-features)
+    - [Vault Management](#vault-management)
+    - [Security](#security)
+    - [Gas Optimization](#gas-optimization)
+  - [Contract Interactions](#contract-interactions)
+  - [Whitelist Configuration](#whitelist-configuration)
+    - [Default Behavior](#default-behavior)
+    - [Customization Options](#customization-options)
+  - [Development](#development)
+    - [Prerequisites](#prerequisites)
+    - [Quick Start](#quick-start)
+    - [Setup](#setup)
+    - [Testing](#testing)
+    - [Deployment](#deployment)
+      - [Deployment Flow](#deployment-flow)
+      - [Multi-Network Deployment](#multi-network-deployment)
+      - [Upgrading Contracts](#upgrading-contracts)
+  - [Usage Examples](#usage-examples)
+    - [Integrating with Your dApp](#integrating-with-your-dapp)
+    - [Calculating ETH Amount](#calculating-eth-amount)
+  - [Security Considerations](#security-considerations)
+    - [Rate Limiting](#rate-limiting)
+    - [Emergency Procedures](#emergency-procedures)
+  - [Interface Integration](#interface-integration)
+    - [Key Functions](#key-functions)
+  - [Error Handling](#error-handling)
+  - [Upgradeability](#upgradeability)
+  - [Contributing](#contributing)
+  - [License](#license)
+
+## Overview
+
+Gas Station is a protocol that enables users to pay for Ethereum transaction fees using ERC20 tokens instead of ETH. This solves the common UX problem where users need to hold ETH solely for gas payments, even when primarily using tokens.
+
+**Key Benefits:**
+- Pay gas fees with any supported ERC20 token
+- No need to hold ETH for transactions
+- Seamless integration with existing dApps
+- Secure token-to-ETH conversion with price oracles
+- Permit-based approvals for gasless token transfers
+
 ## Architecture
 
 The system consists of several smart contracts working together to provide secure and efficient token-to-ETH conversion for gas payments:
@@ -16,6 +67,13 @@ graph TD
     C & D & E --> G[Token Deposits]
     C & D & E --> H[ETH Balance]
 ```
+
+**Flow Explanation:**
+1. The GasStation contract serves as the main entry point
+2. It interacts with the VaultFactory to manage multiple Vault instances
+3. Each Vault stores token deposits and ETH balances
+4. The TokenWhitelist provides security by validating supported tokens
+5. When a user deposits tokens, they receive ETH for gas at the current exchange rate
 
 ### Core Components
 
@@ -108,18 +166,21 @@ tokenWhitelist.addToken(tokenAddress);
 The system supports more advanced whitelist configurations:
 
 1. **Update Global Whitelist**: The VaultFactory can point to a new whitelist contract for all new vaults:
+
    ```solidity
    // Update the whitelist for all new vaults
    vaultFactory.updateWhitelist(newWhitelistAddress);
    ```
 
 2. **Individual Vault Whitelist**: Each vault can have its whitelist updated separately:
+
    ```solidity
    // Update whitelist for a specific vault
    vault.setTokenWhitelist(customWhitelistAddress);
    ```
 
 3. **Batch Update**: Multiple vaults can be updated to use a different whitelist:
+
    ```solidity
    // Update multiple vaults to use a new whitelist
    vaultFactory.batchUpdateTokenWhitelist(vaultAddresses, newWhitelistAddress);
@@ -134,6 +195,29 @@ This flexibility allows for creating different token acceptance policies for dif
 - Node.js >= 16
 - Hardhat
 - OpenZeppelin Contracts
+- Ethereum wallet (MetaMask, etc.)
+- Access to Ethereum RPC endpoint
+
+### Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/gas-station-bot.git
+cd gas-station-bot/apps/eth-contracts
+
+# Install dependencies
+npm install
+
+# Compile contracts
+npx hardhat compile
+
+# Run tests
+npx hardhat test
+
+# Deploy to local network
+npx hardhat node
+npx hardhat run scripts/deploy.js --network localhost
+```
 
 ### Setup
 
@@ -152,6 +236,157 @@ npx hardhat test
 
 ```bash
 npx hardhat deploy --network <network>
+```
+
+#### Deployment Flow
+
+The deployment process follows a specific sequence to ensure all contracts are properly initialized and connected:
+
+1. **Environment Setup**
+
+   ```bash
+   # Create .env file with required variables
+   cp .env.example .env
+
+   # Edit .env with your configuration
+   # Required variables:
+   # - PRIVATE_KEY: Deployer wallet private key
+   # - RPC_URL_<NETWORK>: RPC endpoint for target network
+   # - ETHERSCAN_API_KEY: For contract verification
+   ```
+
+2. **Deployment Sequence**
+
+   ```bash
+   # Deploy all contracts in the correct order
+   npx hardhat run scripts/deploy.js --network <network>
+   ```
+
+   The deployment script handles the following steps:
+   - Deploy TokenWhitelist contract
+   - Deploy VaultFactory contract with TokenWhitelist address
+   - Deploy initial Vault implementation
+   - Set Vault implementation in VaultFactory
+   - Deploy GasStation contract with VaultFactory address
+   - Transfer ownership to final admin address
+
+3. **Contract Verification**
+
+   ```bash
+   # Verify contracts on Etherscan/block explorer
+   npx hardhat verify --network <network> <CONTRACT_ADDRESS> <CONSTRUCTOR_ARGS>
+
+   # Example: Verify GasStation contract
+   npx hardhat verify --network mainnet 0x1234...5678 "0xabcd...ef01"
+   ```
+
+4. **Post-Deployment Configuration**
+
+   ```bash
+   # Add supported tokens to whitelist
+   npx hardhat run scripts/add-tokens.js --network <network>
+
+   # Configure price feeds
+   npx hardhat run scripts/set-price-feeds.js --network <network>
+
+   # Create initial vaults
+   npx hardhat run scripts/create-vaults.js --network <network>
+   ```
+
+5. **Deployment Verification**
+
+   ```bash
+   # Verify deployment is working correctly
+   npx hardhat run scripts/verify-deployment.js --network <network>
+   ```
+
+   This script performs the following checks:
+   - All contracts are deployed and initialized
+   - Ownership is correctly set
+   - Tokens can be exchanged for ETH
+   - Vaults are functioning properly
+
+#### Multi-Network Deployment
+
+For deploying to multiple networks, the repository includes network-specific configuration:
+
+```javascript
+// hardhat.config.js
+module.exports = {
+  networks: {
+    mainnet: {
+      url: process.env.RPC_URL_MAINNET,
+      accounts: [process.env.PRIVATE_KEY]
+    },
+    goerli: {
+      url: process.env.RPC_URL_GOERLI,
+      accounts: [process.env.PRIVATE_KEY]
+    },
+    arbitrum: {
+      url: process.env.RPC_URL_ARBITRUM,
+      accounts: [process.env.PRIVATE_KEY]
+    }
+    // Add other networks as needed
+  }
+};
+```
+
+#### Upgrading Contracts
+
+To upgrade any of the contracts:
+
+```bash
+# Deploy new implementation
+npx hardhat run scripts/upgrade-<contract>.js --network <network>
+```
+
+The upgrade scripts handle:
+
+- Deploying new implementation contract
+- Setting the implementation in the proxy
+- Verifying the new implementation on Etherscan
+
+## Usage Examples
+
+### Integrating with Your dApp
+
+```javascript
+// Initialize the Gas Station contract
+const gasStation = new ethers.Contract(
+  GAS_STATION_ADDRESS,
+  GAS_STATION_ABI,
+  provider
+);
+
+// Get token approval using permit
+const { v, r, s } = await getPermitSignature(
+  token,
+  amount,
+  deadline,
+  signer
+);
+
+// Exchange tokens for ETH
+await gasStation.exchangeWithPermit(
+  tokenAddress,
+  amount,
+  destinationAddress,
+  deadline,
+  v,
+  r,
+  s
+);
+```
+
+### Calculating ETH Amount
+
+```javascript
+// Calculate how much ETH will be received for a token amount
+const ethAmount = await gasStation.calculateEthAmount(
+  tokenAddress,
+  tokenAmount
+);
+console.log(`You will receive ${ethers.utils.formatEther(ethAmount)} ETH`);
 ```
 
 ## Security Considerations
@@ -196,10 +431,10 @@ function calculateEthAmount(
 
 The system uses custom errors for clear error reporting:
 
-- `InsufficientBalance`
-- `VaultNotFound`
-- `TokenNotSupported`
-- `VaultBalanceDistributionNeeded`
+- `InsufficientBalance` - Not enough tokens or ETH in the vault
+- `VaultNotFound` - No suitable vault available for the operation
+- `TokenNotSupported` - The token is not on the whitelist
+- `VaultBalanceDistributionNeeded` - ETH balance needs redistribution across vaults
 
 ## Upgradeability
 
@@ -209,6 +444,18 @@ All core contracts are upgradeable using the UUPS pattern:
 - Vault
 - VaultFactory
 - TokenWhitelist
+
+## Contributing
+
+Contributions are welcome! Please follow these steps:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+Please ensure your code follows the project's coding standards and includes appropriate tests.
 
 ## License
 
