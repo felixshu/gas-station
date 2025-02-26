@@ -54,6 +54,10 @@ graph TD
 - Manages allowed tokens
 - Security layer for token operations
 - Centralized token validation
+- Features:
+  - Default shared whitelist for all vaults
+  - Flexible whitelist configuration options
+  - Batch whitelist updates
 
 ## Key Features
 
@@ -85,6 +89,43 @@ graph TD
 2. GasStation finds suitable vault using `findBestVault`
 3. Tokens are transferred to the vault
 4. ETH is sent to the user's destination address
+
+## Whitelist Configuration
+
+The system provides flexible whitelist management options:
+
+### Default Behavior
+
+By default, all vaults share a single TokenWhitelist contract. When a token is added to this whitelist, it becomes available to all vaults simultaneously:
+
+```solidity
+// Add a token to the shared whitelist
+tokenWhitelist.addToken(tokenAddress);
+```
+
+### Customization Options
+
+The system supports more advanced whitelist configurations:
+
+1. **Update Global Whitelist**: The VaultFactory can point to a new whitelist contract for all new vaults:
+   ```solidity
+   // Update the whitelist for all new vaults
+   vaultFactory.updateWhitelist(newWhitelistAddress);
+   ```
+
+2. **Individual Vault Whitelist**: Each vault can have its whitelist updated separately:
+   ```solidity
+   // Update whitelist for a specific vault
+   vault.setTokenWhitelist(customWhitelistAddress);
+   ```
+
+3. **Batch Update**: Multiple vaults can be updated to use a different whitelist:
+   ```solidity
+   // Update multiple vaults to use a new whitelist
+   vaultFactory.batchUpdateTokenWhitelist(vaultAddresses, newWhitelistAddress);
+   ```
+
+This flexibility allows for creating different token acceptance policies for different groups of vaults, though the default behavior is a shared whitelist for simplicity and consistency.
 
 ## Development
 

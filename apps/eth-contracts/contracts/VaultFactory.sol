@@ -300,14 +300,14 @@ contract VaultFactory is
      * @dev Find vaults that match specific criteria
      * @param minBalance Minimum ETH balance to filter by (0 for no minimum)
      * @param maxBalance Maximum ETH balance to filter by (0 for no maximum)
-     * @param owner Owner address to filter by (address(0) for any owner)
+     * @param vaultOwner Owner address to filter by (address(0) for any owner)
      * @param limit Maximum number of results to return (0 for no limit)
      * @return matchingVaults Array of vault addresses that match the criteria
      */
     function findVaultsByCriteria(
         uint256 minBalance,
         uint256 maxBalance,
-        address owner,
+        address vaultOwner,
         uint256 limit
     ) external view returns (address[] memory) {
         address[] memory allVaultAddresses = _getAllVaults();
@@ -316,7 +316,7 @@ contract VaultFactory is
                 allVaultAddresses,
                 minBalance,
                 maxBalance,
-                owner,
+                vaultOwner,
                 limit
             );
     }
