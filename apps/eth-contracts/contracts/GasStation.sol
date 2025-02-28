@@ -551,7 +551,8 @@ contract GasStation is
         // Convert to same decimals: amount in token * 10^(18 - token decimals) = amount in token with 18 decimals
         uint256 amountIn18Decimals = amount * (10 ** (18 - config.decimals));
 
-        // Convert to ETH: amount in token with 18 decimals * 10^8 / ETH price in USD with 8 decimals = amount in ETH with 18 decimals
+        // Convert to ETH: amount in token with 18 decimals * 10^8 / ETH price in USD with 8 decimals
+        // = amount in ETH with 18 decimals
         uint256 ethAmount = (amountIn18Decimals * (10 ** PRICE_FEED_DECIMALS)) / uint256(price);
 
         return ethAmount;

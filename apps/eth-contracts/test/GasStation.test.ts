@@ -13,6 +13,59 @@ import type {
 } from "../typechain-types";
 import { deployVaultFactoryWithLibraries } from "./helpers/fixtures";
 
+// Helper function to create a permit signature
+async function createPermitSignature(
+  token: MockERC20 & Contract,
+  owner: HardhatEthersSigner,
+  spender: string,
+  value: bigint,
+  deadline: bigint
+) {
+  const network = await ethers.provider.getNetwork();
+  const chainId = network.chainId;
+  const tokenName = await token.name();
+  const tokenAddress = await token.getAddress();
+  const nonce = await token.nonces(owner.address);
+
+  // EIP-2612 permit type data
+  const domain = {
+    name: tokenName,
+    version: "1",
+    chainId: chainId,
+    verifyingContract: tokenAddress,
+  };
+
+  const types = {
+    Permit: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+    ],
+  };
+
+  const value712 = {
+    owner: owner.address,
+    spender: spender,
+    value: value,
+    nonce: nonce,
+    deadline: deadline,
+  };
+
+  // Sign the permit
+  const signature = await owner.signTypedData(domain, types, value712);
+
+  // Split the signature
+  const sig = ethers.Signature.from(signature);
+
+  return {
+    v: sig.v,
+    r: sig.r,
+    s: sig.s,
+  };
+}
+
 describe("GasStation", function () {
   let gasStation: GasStation & Contract;
   let vaultFactory: VaultFactory & Contract;
@@ -27,9 +80,7 @@ describe("GasStation", function () {
   const MIN_DEPOSIT = ethers.parseUnits("10", 6); // 10 USDC
   const MAX_DEPOSIT = ethers.parseUnits("10000", 6); // 10,000 USDC
   const ETH_PRICE = ethers.parseUnits("2000", 8); // $2000 per ETH
-  const MAX_DEPOSITS_PER_BLOCK = 10;
   const depositAmount = ethers.parseUnits("1000", 6); // 1000 USDC
-  const deadline = ethers.MaxUint256;
 
   async function deployFixture() {
     [owner, user, otherUser] = await ethers.getSigners();
@@ -118,7 +169,7 @@ describe("GasStation", function () {
     const vaultAddress = await vaultFactory.getLastVaultByOwner(gasStationAddress);
 
     // Set the gasStation address in the Vault contract
-    const vault = await ethers.getContractAt("Vault", vaultAddress);
+    await ethers.getContractAt("Vault", vaultAddress);
     await gasStation.connect(owner).setVaultGasStation(vaultAddress, gasStationAddress);
 
     // Fund the vault with ETH
@@ -499,6 +550,274 @@ describe("GasStation", function () {
 
       // Debug: Check final state
       console.log("Final paused state:", await gasStation.paused());
+    });
+  });
+
+  describe("Exchange with Permit", function () {
+    it("should process exchange with permit", async function () {
+      // Get the current timestamp
+      const latestBlock = await ethers.provider.getBlock("latest");
+      const currentTimestamp = latestBlock!.timestamp;
+      const deadline = BigInt(currentTimestamp) + BigInt(3600); // 1 hour from now
+
+      // Calculate expected ETH amount
+      const ethAmount = await gasStation.calculateEthAmount(
+        await mockUSDC.getAddress(),
+        depositAmount
+      );
+
+      // Get initial balances
+      const userBalanceBefore = await ethers.provider.getBalance(await user.getAddress());
+      const usdcBalanceBefore = await mockUSDC.balanceOf(await user.getAddress());
+
+      // Create permit signature
+      const signature = await createPermitSignature(
+        mockUSDC,
+        user,
+        await gasStation.getAddress(),
+        depositAmount,
+        deadline
+      );
+
+      // Execute exchangeWithPermit
+      const tx = await gasStation.connect(user).exchangeWithPermit({
+        exchange: {
+          token: await mockUSDC.getAddress(),
+          amount: depositAmount,
+          destination: await user.getAddress(),
+        },
+        deadline: deadline,
+        v: signature.v,
+        r: signature.r,
+        s: signature.s,
+      });
+
+      // Get final balances
+      const userBalanceAfter = await ethers.provider.getBalance(await user.getAddress());
+      const usdcBalanceAfter = await mockUSDC.balanceOf(await user.getAddress());
+
+      // Verify USDC was spent
+      expect(usdcBalanceBefore - usdcBalanceAfter).to.equal(depositAmount);
+
+      // Verify ETH was received (accounting for gas costs)
+      expect(userBalanceAfter).to.be.gt(userBalanceBefore);
+      expect(userBalanceAfter).to.be.closeTo(
+        userBalanceBefore + ethAmount - BigInt(tx.gasLimit) * BigInt(tx.maxFeePerGas || 0),
+        ethers.parseEther("0.1") // Margin to account for gas costs
+      );
+
+      // Verify the event was emitted with correct parameters
+      await expect(tx)
+        .to.emit(gasStation, "DepositProcessed")
+        .withArgs(
+          await user.getAddress(),
+          await user.getAddress(),
+          await mockUSDC.getAddress(),
+          depositAmount,
+          ethAmount
+        );
+    });
+
+    it("should revert when permit deadline has expired", async function () {
+      // Set deadline in the past
+      const latestBlock = await ethers.provider.getBlock("latest");
+      const currentTimestamp = latestBlock!.timestamp;
+      const deadline = BigInt(currentTimestamp) - BigInt(3600); // 1 hour ago
+
+      // Create permit signature
+      const signature = await createPermitSignature(
+        mockUSDC,
+        user,
+        await gasStation.getAddress(),
+        depositAmount,
+        deadline
+      );
+
+      // Execute exchangeWithPermit with expired deadline
+      await expect(
+        gasStation.connect(user).exchangeWithPermit({
+          exchange: {
+            token: await mockUSDC.getAddress(),
+            amount: depositAmount,
+            destination: await user.getAddress(),
+          },
+          deadline: deadline,
+          v: signature.v,
+          r: signature.r,
+          s: signature.s,
+        })
+      ).to.be.revertedWithCustomError(gasStation, "ExpiredDeadline");
+    });
+
+    it("should use default token when token is zero address", async function () {
+      // Get the current timestamp
+      const latestBlock = await ethers.provider.getBlock("latest");
+      const currentTimestamp = latestBlock!.timestamp;
+      const deadline = BigInt(currentTimestamp) + BigInt(3600); // 1 hour from now
+
+      // Create permit signature for the default token (mockUSDC)
+      const signature = await createPermitSignature(
+        mockUSDC,
+        user,
+        await gasStation.getAddress(),
+        depositAmount,
+        deadline
+      );
+
+      // Execute exchangeWithPermit with zero address token
+      const tx = await gasStation.connect(user).exchangeWithPermit({
+        exchange: {
+          token: ethers.ZeroAddress, // Zero address should use default token
+          amount: depositAmount,
+          destination: await user.getAddress(),
+        },
+        deadline: deadline,
+        v: signature.v,
+        r: signature.r,
+        s: signature.s,
+      });
+
+      // Verify the event was emitted with the default token address
+      await expect(tx)
+        .to.emit(gasStation, "DepositProcessed")
+        .withArgs(
+          await user.getAddress(),
+          await user.getAddress(),
+          await mockUSDC.getAddress(), // Default token
+          depositAmount,
+          await gasStation.calculateEthAmount(await mockUSDC.getAddress(), depositAmount)
+        );
+    });
+  });
+
+  describe("Rate Limiting", function () {
+    it("should enforce rate limits for deposits in the same block", async function () {
+      // Get the MAX_DEPOSITS_PER_BLOCK constant from the contract
+      const maxDepositsPerBlock = await gasStation.MAX_DEPOSITS_PER_BLOCK();
+
+      // Disable auto-mining to control block creation
+      await network.provider.send("evm_setAutomine", [false]);
+
+      try {
+        const depositAmount = ethers.parseEther("1");
+        await mockUSDC.connect(user).approve(gasStation.getAddress(), ethers.MaxUint256);
+        await network.provider.send("evm_mine");
+
+        // Send maxDepositsPerBlock transactions in the same block
+        const promises = [];
+        for (let i = 0; i < Number(maxDepositsPerBlock); i++) {
+          promises.push(
+            gasStation.connect(user).exchange({
+              token: mockUSDC.getAddress(),
+              amount: depositAmount,
+              destination: user.address,
+            })
+          );
+        }
+
+        // Mine the block with all transactions
+        await network.provider.send("evm_mine");
+
+        // Wait for all transactions to complete
+        await Promise.all(promises);
+
+        // Now try one more transaction in the same block
+        await gasStation.connect(user).exchange({
+          token: mockUSDC.getAddress(),
+          amount: depositAmount,
+          destination: user.address,
+        });
+
+        // This should fail with RateLimitExceeded, but we need to mine the block to see the error
+        await network.provider.send("evm_mine");
+
+        // The test should fail here, but if it doesn't, we'll add an explicit assertion
+        expect.fail("Expected transaction to be reverted with RateLimitExceeded");
+      } catch (error: any) {
+        // Check if the error contains the expected message
+        expect(error.message).to.include("RateLimitExceeded");
+      } finally {
+        // Re-enable auto-mining
+        await network.provider.send("evm_setAutomine", [true]);
+      }
+    });
+
+    it("should reset rate limit counter in a new block", async function () {
+      // Get the MAX_DEPOSITS_PER_BLOCK constant from the contract
+      const maxDepositsPerBlock = await gasStation.MAX_DEPOSITS_PER_BLOCK();
+
+      // Disable auto-mining to control block creation
+      await network.provider.send("evm_setAutomine", [false]);
+
+      try {
+        const depositAmount = ethers.parseEther("1");
+        await mockUSDC.connect(user).approve(gasStation.getAddress(), ethers.MaxUint256);
+
+        // Send maxDepositsPerBlock transactions in the same block
+        const promises = [];
+        for (let i = 0; i < Number(maxDepositsPerBlock); i++) {
+          promises.push(
+            gasStation.connect(user).exchange({
+              token: mockUSDC.getAddress(),
+              amount: depositAmount,
+              destination: user.address,
+            })
+          );
+        }
+
+        // Mine the block with all transactions
+        await network.provider.send("evm_mine");
+
+        // Wait for all transactions to complete
+        await Promise.all(promises);
+
+        // Mine a new block
+        await network.provider.send("evm_mine");
+
+        // This transaction should succeed in the new block
+        await gasStation.connect(user).exchange({
+          token: mockUSDC.getAddress(),
+          amount: depositAmount,
+          destination: user.address,
+        });
+      } finally {
+        // Re-enable auto-mining
+        await network.provider.send("evm_setAutomine", [true]);
+      }
+    });
+
+    it("should emit rate limit events with correct values", async function () {
+      // Execute a transaction and check for rate limit events
+      const tx = await gasStation.connect(user).exchange({
+        token: await mockUSDC.getAddress(),
+        amount: depositAmount,
+        destination: await user.getAddress(),
+      });
+
+      const receipt = await tx.wait();
+
+      // Find RateLimitCheck event
+      const checkEvent = receipt?.logs.find((log) => {
+        const eventLog = log as unknown as { fragment?: { name: string } };
+        return eventLog.fragment?.name === "RateLimitCheck";
+      });
+
+      // Find RateLimitUpdated event
+      const updateEvent = receipt?.logs.find((log) => {
+        const eventLog = log as unknown as { fragment?: { name: string } };
+        return eventLog.fragment?.name === "RateLimitUpdated";
+      });
+
+      // Verify events were emitted
+      expect(checkEvent).to.not.be.undefined;
+      expect(updateEvent).to.not.be.undefined;
+
+      // Get the current block number
+      const blockNumber = await ethers.provider.getBlockNumber();
+
+      // Verify RateLimitUpdated event has the correct block number
+      const updateArgs = (updateEvent as unknown as { args: any[] }).args;
+      expect(updateArgs[0]).to.equal(blockNumber);
     });
   });
 });

@@ -9,7 +9,6 @@ import type {
   GasStation,
   VaultFactory,
   Vault,
-  MockPriceFeed,
 } from "../typechain-types";
 import { deployVaultFactoryWithLibraries } from "./helpers/fixtures";
 
@@ -355,7 +354,7 @@ describe("TokenWhitelist", function () {
       const vaultAddress = await vaultFactory.getLastVaultByOwner(await gasStation.getAddress());
 
       // Set the gasStation address in the Vault contract
-      const vault = await ethers.getContractAt("Vault", vaultAddress);
+      await ethers.getContractAt("Vault", vaultAddress);
       await gasStation
         .connect(owner)
         .setVaultGasStation(vaultAddress, await gasStation.getAddress());

@@ -114,29 +114,54 @@ contract TokenWhitelist is Initializable, OwnableUpgradeable, PausableUpgradeabl
         if (length == 0) revert Errors.InvalidLimits(0, 1);
         if (length > MAX_BATCH_SIZE) revert Errors.BatchSizeTooLarge(length, MAX_BATCH_SIZE);
 
-        uint256 addedCount = 0;
+        uint256 addedCount = _processTokenBatch(tokens);
 
-        // Process tokens directly from calldata without copying to memory
-        for (uint256 i = 0; i < length; i++) {
-            address token = tokens[i];
-
-            // Skip invalid tokens
-            if (token == address(0)) continue;
-            if (_whitelistedTokens.contains(token)) continue;
-            if (!_isContract(token)) continue;
-
-            // Add valid token
-            if (_whitelistedTokens.add(token)) {
-                addedCount++;
-                emit TokenAdded(token);
-            }
-        }
-
-        // Invalidate all caches since the token list changed
+        // Emit batch events if any tokens were added
         if (addedCount > 0) {
             emit WhitelistUpdated(_whitelistedTokens.length());
             emit TokensAddedInBatch(addedCount);
         }
+    }
+
+    /**
+     * @dev Process a batch of tokens and add valid ones to the whitelist
+     * @param tokens Array of token addresses to process
+     * @return addedCount Number of tokens successfully added
+     */
+    function _processTokenBatch(address[] calldata tokens) private returns (uint256 addedCount) {
+        addedCount = 0;
+
+        // Process tokens directly from calldata without copying to memory
+        for (uint256 i = 0; i < tokens.length; i++) {
+            address token = tokens[i];
+
+            // Try to add the token and increment count if successful
+            if (_tryAddToken(token)) {
+                addedCount++;
+            }
+        }
+
+        return addedCount;
+    }
+
+    /**
+     * @dev Try to add a single token to the whitelist
+     * @param token Address of the token to add
+     * @return success True if the token was added, false otherwise
+     */
+    function _tryAddToken(address token) private returns (bool success) {
+        // Skip invalid tokens
+        if (token == address(0)) return false;
+        if (_whitelistedTokens.contains(token)) return false;
+        if (!_isContract(token)) return false;
+
+        // Add valid token
+        if (_whitelistedTokens.add(token)) {
+            emit TokenAdded(token);
+            return true;
+        }
+
+        return false;
     }
 
     /**
