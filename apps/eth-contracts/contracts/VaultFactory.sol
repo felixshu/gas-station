@@ -354,7 +354,9 @@ contract VaultFactory is
 
             if (ethBalance > 0) {
                 // Transfer ETH from old vault to new vault
-                vault.sendEth(IVault.EthParams({ amount: ethBalance, recipient: newVault }));
+                vault.sendEth(
+                    IVault.EthParams({ amount: ethBalance, recipient: newVault, user: address(0) })
+                );
             }
         }
 

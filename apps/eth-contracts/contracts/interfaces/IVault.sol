@@ -25,6 +25,7 @@ interface IVault {
         address token;
         uint256 amount;
         address recipient;
+        address user; // The user whose balance will be affected (if address(0), msg.sender is used)
     }
 
     /**
@@ -33,6 +34,7 @@ interface IVault {
     struct EthParams {
         uint256 amount;
         address recipient;
+        address user; // The user whose balance will be affected (if address(0), msg.sender is used)
     }
 
     // ======================================================
@@ -60,6 +62,9 @@ interface IVault {
     // @dev Event emitted when ETH is sent
     event EthSent(address indexed destination, uint256 amount);
 
+    // @dev Event emitted when admin is set
+    event AdminSet(address indexed previousAdmin, address indexed newAdmin);
+
     // ======================================================
     // Functions
     // ======================================================
@@ -81,6 +86,12 @@ interface IVault {
      * @param _gasStation The gas station contract
      */
     function setGasStation(address _gasStation) external;
+
+    /**
+     * @dev Set the admin address
+     * @param _admin The new admin address
+     */
+    function setAdmin(address _admin) external;
 
     /**
      * @dev Deposit ETH into the vault

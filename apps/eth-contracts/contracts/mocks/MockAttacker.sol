@@ -29,7 +29,12 @@ contract MockAttacker is Ownable {
         IERC20(token).approve(address(vault), amount);
         // Deposit tokens to vault
         vault.depositToken(
-            IVault.TokenParams({ token: token, amount: amount, recipient: address(0) })
+            IVault.TokenParams({
+                token: token,
+                amount: amount,
+                recipient: address(0),
+                user: address(0)
+            })
         );
         attacking = false;
     }
@@ -37,7 +42,9 @@ contract MockAttacker is Ownable {
     function attackWithdraw(address token, uint256 amount, address to) external onlyOwner {
         attacking = true;
         // Withdraw tokens from vault
-        vault.withdrawToken(IVault.TokenParams({ token: token, amount: amount, recipient: to }));
+        vault.withdrawToken(
+            IVault.TokenParams({ token: token, amount: amount, recipient: to, user: address(0) })
+        );
         attacking = false;
     }
 
@@ -53,7 +60,12 @@ contract MockAttacker is Ownable {
         if (attacking && keccak256(bytes(reentrantFunction)) == keccak256(bytes("depositToken"))) {
             // Try to deposit during receive callback (should fail)
             vault.depositToken(
-                IVault.TokenParams({ token: address(0), amount: 1, recipient: address(0) })
+                IVault.TokenParams({
+                    token: address(0),
+                    amount: 1,
+                    recipient: address(0),
+                    user: address(0)
+                })
             ); // This should fail due to reentrancy guard
         }
         // If we're attacking and the reentrant function is set to withdrawToken,
@@ -63,7 +75,12 @@ contract MockAttacker is Ownable {
         ) {
             // Try to withdraw during receive callback (should fail)
             vault.withdrawToken(
-                IVault.TokenParams({ token: address(0), amount: 1, recipient: msg.sender })
+                IVault.TokenParams({
+                    token: address(0),
+                    amount: 1,
+                    recipient: msg.sender,
+                    user: address(0)
+                })
             ); // This should fail due to reentrancy guard
         }
     }
@@ -75,7 +92,12 @@ contract MockAttacker is Ownable {
         if (attacking && keccak256(bytes(reentrantFunction)) == keccak256(bytes("depositToken"))) {
             // Try to deposit during token receive callback (should fail)
             vault.depositToken(
-                IVault.TokenParams({ token: address(0), amount: 1, recipient: address(0) })
+                IVault.TokenParams({
+                    token: address(0),
+                    amount: 1,
+                    recipient: address(0),
+                    user: address(0)
+                })
             ); // This should fail due to reentrancy guard
         }
         // If we're attacking and the reentrant function is set to withdrawToken,
@@ -85,7 +107,12 @@ contract MockAttacker is Ownable {
         ) {
             // Try to withdraw during token receive callback (should fail)
             vault.withdrawToken(
-                IVault.TokenParams({ token: address(0), amount: 1, recipient: msg.sender })
+                IVault.TokenParams({
+                    token: address(0),
+                    amount: 1,
+                    recipient: msg.sender,
+                    user: address(0)
+                })
             ); // This should fail due to reentrancy guard
         }
         return this.onERC20Received.selector;

@@ -152,7 +152,11 @@ library VaultUtils {
             // Move ETH from source to target
             try
                 updatedState.vault.sendEth(
-                    IVault.EthParams({ amount: amountToMove, recipient: targetVault })
+                    IVault.EthParams({
+                        amount: amountToMove,
+                        recipient: targetVault,
+                        user: address(0)
+                    })
                 )
             {
                 // Update balances

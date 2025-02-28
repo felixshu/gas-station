@@ -38,6 +38,9 @@ contract Vault is
     // @dev Gas station contract address
     address public gasStation;
 
+    // @dev Admin address responsible for withdrawals
+    address public admin;
+
     // @dev User balances mapping: user => token => amount
     mapping(address => mapping(address => uint256)) private _balances;
 
@@ -53,6 +56,14 @@ contract Vault is
      */
     modifier onlyGasStation() {
         if (msg.sender != gasStation) revert Errors.NotGasStation(msg.sender, gasStation);
+        _;
+    }
+
+    /**
+     * @dev Modifier to restrict access to admin only
+     */
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert Errors.UnauthorizedAccess(msg.sender, admin);
         _;
     }
 
@@ -84,6 +95,7 @@ contract Vault is
         if (params.whitelist == address(0)) revert Errors.InvalidAddress(params.whitelist);
         tokenWhitelist = params.whitelist;
         gasStation = params.owner; // Set gasStation to owner initially
+        admin = params.owner; // Set admin to owner initially
     }
 
     /**
@@ -103,6 +115,17 @@ contract Vault is
     function setGasStation(address _gasStation) external onlyOwner {
         if (_gasStation == address(0)) revert Errors.InvalidAddress(_gasStation);
         gasStation = _gasStation;
+    }
+
+    /**
+     * @dev Set the admin address
+     * @param _admin The new admin address
+     */
+    function setAdmin(address _admin) external onlyOwner {
+        if (_admin == address(0)) revert Errors.InvalidAddress(_admin);
+        address previousAdmin = admin;
+        admin = _admin;
+        emit AdminSet(previousAdmin, _admin);
     }
 
     /**
@@ -161,28 +184,28 @@ contract Vault is
      * @dev Withdraw ETH from the vault
      * @param params The ETH parameters
      */
-    function withdrawEth(EthParams calldata params) external onlyOwner nonReentrant whenNotPaused {
+    function withdrawEth(EthParams calldata params) external onlyAdmin nonReentrant whenNotPaused {
         if (params.amount == 0) revert Errors.ZeroAmount();
 
-        address sender = msg.sender;
+        address userAddress = params.user == address(0) ? msg.sender : params.user;
         uint256 amount = params.amount;
         address recipient = params.recipient;
 
         // Cache the current balance to avoid multiple storage reads
-        uint256 currentBalance = _balances[sender][address(0)];
+        uint256 currentBalance = _balances[userAddress][address(0)];
 
         if (currentBalance < amount)
-            revert Errors.InsufficientBalance(sender, currentBalance, amount);
+            revert Errors.InsufficientBalance(userAddress, currentBalance, amount);
 
         // Update balances
-        _balances[sender][address(0)] = currentBalance - amount;
+        _balances[userAddress][address(0)] = currentBalance - amount;
         _totalDeposits[address(0)] -= amount;
 
         // Transfer ETH
         (bool success, ) = recipient.call{ value: amount }("");
         if (!success) revert Errors.TransferFailed(address(0), address(this), recipient, amount);
 
-        emit Withdrawn(sender, address(0), amount);
+        emit Withdrawn(userAddress, address(0), amount);
     }
 
     /**
@@ -191,28 +214,28 @@ contract Vault is
      */
     function withdrawToken(
         TokenParams calldata params
-    ) external onlyOwner nonReentrant whenNotPaused onlyWhitelistedToken(params.token) {
+    ) external onlyAdmin nonReentrant whenNotPaused onlyWhitelistedToken(params.token) {
         if (params.amount == 0) revert Errors.ZeroAmount();
 
-        address sender = msg.sender;
+        address userAddress = params.user == address(0) ? msg.sender : params.user;
         address token = params.token;
         uint256 amount = params.amount;
         address recipient = params.recipient;
 
         // Cache the current balance to avoid multiple storage reads
-        uint256 currentBalance = _balances[sender][token];
+        uint256 currentBalance = _balances[userAddress][token];
 
         if (currentBalance < amount)
-            revert Errors.InsufficientBalance(sender, currentBalance, amount);
+            revert Errors.InsufficientBalance(userAddress, currentBalance, amount);
 
         // Update balances
-        _balances[sender][token] = currentBalance - amount;
+        _balances[userAddress][token] = currentBalance - amount;
         _totalDeposits[token] -= amount;
 
         // Transfer tokens
         IERC20(token).safeTransfer(recipient, amount);
 
-        emit Withdrawn(sender, token, amount);
+        emit Withdrawn(userAddress, token, amount);
     }
 
     /**

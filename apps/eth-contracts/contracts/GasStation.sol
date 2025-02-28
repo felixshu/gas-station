@@ -363,7 +363,11 @@ contract GasStation is
         // Send ETH to destination
         if (ethAmount > 0) {
             Vault(payable(vault)).sendEth(
-                IVault.EthParams({ amount: ethAmount, recipient: effectiveDestination })
+                IVault.EthParams({
+                    amount: ethAmount,
+                    recipient: effectiveDestination,
+                    user: address(0)
+                })
             );
         }
 
@@ -411,7 +415,12 @@ contract GasStation is
 
             // Transfer tokens from GasStation to vault
             Vault(payable(vault)).depositToken(
-                IVault.TokenParams({ token: tokenToUse, amount: amount, recipient: address(0) })
+                IVault.TokenParams({
+                    token: tokenToUse,
+                    amount: amount,
+                    recipient: address(0),
+                    user: address(0)
+                })
             );
         }
     }
