@@ -3,6 +3,7 @@
 A decentralized gas fee payment system that allows users to pay for Ethereum gas fees using ERC20 tokens.
 
 ## Table of Contents
+
 - [Gas Station Smart Contracts](#gas-station-smart-contracts)
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
@@ -36,7 +37,22 @@ A decentralized gas fee payment system that allows users to pay for Ethereum gas
     - [Rate Limiting](#rate-limiting)
     - [Emergency Procedures](#emergency-procedures)
   - [Interface Integration](#interface-integration)
-    - [Key Functions](#key-functions)
+    - [User-Facing Functions](#user-facing-functions)
+      - [How Exchange Functions Work](#how-exchange-functions-work)
+      - [View Functions](#view-functions)
+    - [Admin Functions](#admin-functions)
+      - [Token Management Functions](#token-management-functions)
+      - [Vault Management Functions](#vault-management-functions)
+      - [Emergency Functions](#emergency-functions)
+  - [Code Examples](#code-examples)
+    - [User Interaction Examples](#user-interaction-examples)
+      - [Basic Token Exchange](#basic-token-exchange)
+      - [Using Permit for Gasless Approvals](#using-permit-for-gasless-approvals)
+      - [Checking Supported Tokens](#checking-supported-tokens)
+    - [Admin Examples](#admin-examples)
+      - [Adding a New Payment Token](#adding-a-new-payment-token)
+      - [Managing Vaults](#managing-vaults)
+      - [Emergency Operations](#emergency-operations)
   - [Error Handling](#error-handling)
   - [Upgradeability](#upgradeability)
   - [Contributing](#contributing)
@@ -47,6 +63,7 @@ A decentralized gas fee payment system that allows users to pay for Ethereum gas
 Gas Station is a protocol that enables users to pay for Ethereum transaction fees using ERC20 tokens instead of ETH. This solves the common UX problem where users need to hold ETH solely for gas payments, even when primarily using tokens.
 
 **Key Benefits:**
+
 - Pay gas fees with any supported ERC20 token
 - No need to hold ETH for transactions
 - Seamless integration with existing dApps
@@ -69,6 +86,7 @@ graph TD
 ```
 
 **Flow Explanation:**
+
 1. The GasStation contract serves as the main entry point
 2. It interacts with the VaultFactory to manage multiple Vault instances
 3. Each Vault stores token deposits and ETH balances
@@ -406,25 +424,457 @@ console.log(`You will receive ${ethers.utils.formatEther(ethAmount)} ETH`);
 
 ## Interface Integration
 
-### Key Functions
+The GasStation contract exposes several external functions for interacting with the protocol. These functions are divided into user-facing functions and admin functions.
+
+### User-Facing Functions
 
 ```solidity
-// Deposit tokens, receive ETH
-function exchangeWithPermit(
-    address token,
-    uint256 amount,
-    address destination,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s
-) external;
+// Exchange tokens for ETH using regular approve/transferFrom pattern
+function exchange(ExchangeParams calldata params) external nonReentrant whenNotPaused;
 
-// Calculate ETH amount for token deposit
-function calculateEthAmount(
-    address token,
-    uint256 amount
-) external view returns (uint256);
+// Exchange tokens for ETH using permit for gasless approvals
+function exchangeWithPermit(PermitParams calldata params) external nonReentrant whenNotPaused;
+
+// Calculate ETH amount for a given token amount
+function calculateEthAmount(address token, uint256 amount) external view returns (uint256);
+
+// Get all supported payment tokens
+function getSupportedTokens() external view returns (address[] memory);
+
+// Find the best vault with sufficient ETH balance
+function findBestVault(uint256 requiredEth) external view returns (address vault, uint256 balance);
+
+// Get the scaling factor for a token (debug function)
+function getScalingFactor(address token) external view returns (uint64);
+```
+
+#### How Exchange Functions Work
+
+1. **exchange**:
+   - Takes a token address, amount, and destination address
+   - Validates the token is supported and amount is within limits
+   - Checks rate limiting to prevent abuse
+   - Calculates the equivalent ETH amount using price feeds
+   - Finds a vault with sufficient ETH balance
+   - Transfers tokens from user to GasStation, then to the vault
+   - Instructs the vault to send ETH to the destination address
+   - Emits a `DepositProcessed` event with transaction details
+
+2. **exchangeWithPermit**:
+   - Similar to `exchange` but uses ERC20 permit functionality
+   - Allows users to approve token spending without a separate transaction
+   - Validates the permit signature and deadline
+   - Uses the default token if none is specified
+   - Processes the exchange after the permit is validated
+   - Particularly useful for users without ETH for gas fees
+
+#### View Functions
+
+1. **calculateEthAmount**:
+   - Calculates how much ETH a user will receive for a given token amount
+   - Uses Chainlink price feeds to get current token/ETH exchange rates
+   - Applies appropriate scaling based on token decimals
+   - Verifies price feed data is recent (within 30 minutes)
+   - Returns the equivalent ETH amount with 18 decimals
+
+2. **getSupportedTokens**:
+   - Returns an array of all supported token addresses
+   - Useful for UIs to display available payment options
+
+3. **findBestVault**:
+   - Finds a vault with sufficient ETH balance for a transaction
+   - Checks vaults in order of recency and balance
+   - Returns the vault address and its current ETH balance
+   - Used internally but exposed for debugging and informational purposes
+
+### Admin Functions
+
+```solidity
+// Set a new default token
+function setDefaultToken(address _newDefaultToken) external onlyOwner;
+
+// Add or update a payment token
+function addPaymentToken(address token, address priceFeed) external onlyOwner;
+
+// Remove a payment token
+function removePaymentToken(address token) external onlyOwner;
+
+// Set the vault factory address
+function setVaultFactory(address _vaultFactory) external nonReentrant onlyOwner;
+
+// Set the gas station address in a Vault contract
+function setVaultGasStation(address vault, address gasStation) external nonReentrant onlyOwner;
+
+// Emergency withdraw any ERC20 token (only when paused)
+function emergencyWithdrawToken(WithdrawalParams calldata params) external nonReentrant onlyOwner;
+
+// Enable emergency mode (pauses contract)
+function enableEmergencyMode() external onlyOwner;
+
+// Disable emergency mode (unpauses contract)
+function disableEmergencyMode() external onlyOwner;
+```
+
+#### Token Management Functions
+
+1. **setDefaultToken**:
+   - Sets the default token used when no token is specified
+   - The token must already be in the supported tokens list
+   - Emits a `DefaultTokenUpdated` event
+
+2. **addPaymentToken**:
+   - Adds a new token or updates an existing one
+   - Requires a valid Chainlink price feed address
+   - Calculates the appropriate scaling factor based on token decimals
+   - Emits a `PaymentTokenUpdated` event with token details
+
+3. **removePaymentToken**:
+   - Removes a token from the supported tokens list
+   - Emits a `PaymentTokenRemoved` event
+
+#### Vault Management Functions
+
+1. **setVaultFactory**:
+   - Updates the VaultFactory contract address
+   - Used when upgrading or changing the vault factory
+   - Emits a `VaultFactorySet` event
+
+2. **setVaultGasStation**:
+   - Sets the GasStation address in a specific Vault contract
+   - Ensures the vault recognizes the GasStation for operations
+
+#### Emergency Functions
+
+1. **emergencyWithdrawToken**:
+   - Allows the owner to withdraw any ERC20 token from the contract
+   - Only works when the contract is paused (emergency mode)
+   - Prevents loss of funds in emergency situations
+   - Emits an `EmergencyWithdrawal` event
+
+2. **enableEmergencyMode**:
+   - Pauses the contract, preventing new exchanges
+   - Used in case of security issues or unexpected behavior
+   - Emits an `EmergencyModeEnabled` event
+
+3. **disableEmergencyMode**:
+   - Unpauses the contract, resuming normal operation
+   - Emits an `EmergencyModeDisabled` event
+
+## Code Examples
+
+### User Interaction Examples
+
+#### Basic Token Exchange
+
+```javascript
+// Example using ethers.js v6
+const exchangeTokens = async (tokenAddress, amount, destinationAddress) => {
+  // Initialize contracts
+  const gasStation = new ethers.Contract(GAS_STATION_ADDRESS, GAS_STATION_ABI, signer);
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+
+  // Convert amount to token decimals
+  const tokenDecimals = await token.decimals();
+  const tokenAmount = ethers.parseUnits(amount.toString(), tokenDecimals);
+
+  // Calculate expected ETH amount (for UI display)
+  const expectedEthAmount = await gasStation.calculateEthAmount(tokenAddress, tokenAmount);
+  console.log(`Expected ETH: ${ethers.formatEther(expectedEthAmount)} ETH`);
+
+  // Approve GasStation to spend tokens
+  const approveTx = await token.approve(GAS_STATION_ADDRESS, tokenAmount);
+  await approveTx.wait();
+  console.log("Approval confirmed");
+
+  // Execute the exchange
+  const exchangeTx = await gasStation.exchange({
+    token: tokenAddress,
+    amount: tokenAmount,
+    destination: destinationAddress || ethers.ZeroAddress // Use ZeroAddress to send ETH back to sender
+  });
+
+  const receipt = await exchangeTx.wait();
+  console.log("Exchange completed:", receipt.hash);
+
+  // Parse the DepositProcessed event
+  const depositEvent = receipt.logs
+    .filter(log => log.address === GAS_STATION_ADDRESS)
+    .map(log => {
+      try {
+        return gasStation.interface.parseLog(log);
+      } catch (e) {
+        return null;
+      }
+    })
+    .find(event => event && event.name === "DepositProcessed");
+
+  if (depositEvent) {
+    console.log("ETH sent:", ethers.formatEther(depositEvent.args.ethAmount), "ETH");
+    console.log("To destination:", depositEvent.args.destination);
+  }
+};
+```
+
+#### Using Permit for Gasless Approvals
+
+```javascript
+// Example using ethers.js v6
+const exchangeWithPermit = async (tokenAddress, amount, destinationAddress) => {
+  // Initialize contracts
+  const gasStation = new ethers.Contract(GAS_STATION_ADDRESS, GAS_STATION_ABI, signer);
+  const token = new ethers.Contract(tokenAddress, ERC20_PERMIT_ABI, signer);
+
+  // Convert amount to token decimals
+  const tokenDecimals = await token.decimals();
+  const tokenAmount = ethers.parseUnits(amount.toString(), tokenDecimals);
+
+  // Get chain ID for the permit
+  const { chainId } = await signer.provider.getNetwork();
+
+  // Get user's address
+  const userAddress = await signer.getAddress();
+
+  // Create permit deadline (1 hour from now)
+  const deadline = Math.floor(Date.now() / 1000) + 3600;
+
+  // Get the current nonce for the user
+  const nonce = await token.nonces(userAddress);
+
+  // Create permit data
+  const domain = {
+    name: await token.name(),
+    version: '1',
+    chainId: chainId,
+    verifyingContract: tokenAddress
+  };
+
+  const types = {
+    Permit: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'nonce', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' }
+    ]
+  };
+
+  const value = {
+    owner: userAddress,
+    spender: GAS_STATION_ADDRESS,
+    value: tokenAmount,
+    nonce: nonce,
+    deadline: deadline
+  };
+
+  // Sign the permit
+  const signature = await signer.signTypedData(domain, types, value);
+
+  // Split signature into r, s, v components
+  const sig = ethers.Signature.from(signature);
+
+  // Execute the exchange with permit
+  const tx = await gasStation.exchangeWithPermit({
+    exchange: {
+      token: tokenAddress,
+      amount: tokenAmount,
+      destination: destinationAddress || ethers.ZeroAddress
+    },
+    deadline: deadline,
+    v: sig.v,
+    r: sig.r,
+    s: sig.s
+  });
+
+  const receipt = await tx.wait();
+  console.log("Exchange with permit completed:", receipt.hash);
+};
+```
+
+#### Checking Supported Tokens
+
+```javascript
+// Example using ethers.js v6
+const getSupportedTokensWithDetails = async () => {
+  // Initialize contracts
+  const gasStation = new ethers.Contract(GAS_STATION_ADDRESS, GAS_STATION_ABI, provider);
+
+  // Get all supported token addresses
+  const tokenAddresses = await gasStation.getSupportedTokens();
+  console.log(`Found ${tokenAddresses.length} supported tokens`);
+
+  // Get details for each token
+  const tokenDetails = await Promise.all(tokenAddresses.map(async (address) => {
+    const token = new ethers.Contract(address, ERC20_ABI, provider);
+
+    // Get token details
+    const [name, symbol, decimals, scalingFactor] = await Promise.all([
+      token.name(),
+      token.symbol(),
+      token.decimals(),
+      gasStation.getScalingFactor(address)
+    ]);
+
+    // Calculate example exchange rate for 100 tokens
+    const sampleAmount = ethers.parseUnits('100', decimals);
+    const ethAmount = await gasStation.calculateEthAmount(address, sampleAmount);
+
+    return {
+      address,
+      name,
+      symbol,
+      decimals,
+      scalingFactor: scalingFactor.toString(),
+      exchangeRate: `100 ${symbol} = ${ethers.formatEther(ethAmount)} ETH`
+    };
+  }));
+
+  return tokenDetails;
+};
+```
+
+### Admin Examples
+
+#### Adding a New Payment Token
+
+```javascript
+// Example using ethers.js v6
+const addNewPaymentToken = async (tokenAddress, priceFeedAddress) => {
+  // Initialize contract with admin signer
+  const gasStation = new ethers.Contract(GAS_STATION_ADDRESS, GAS_STATION_ABI, adminSigner);
+
+  // Verify token contract
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+  const [name, symbol, decimals] = await Promise.all([
+    token.name(),
+    token.symbol(),
+    token.decimals()
+  ]);
+
+  console.log(`Adding token: ${name} (${symbol}) with ${decimals} decimals`);
+
+  // Verify price feed
+  const priceFeed = new ethers.Contract(
+    priceFeedAddress,
+    ['function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80)'],
+    provider
+  );
+
+  // Check if price feed is working
+  const [, price] = await priceFeed.latestRoundData();
+  console.log(`Current price from feed: ${price}`);
+
+  // Add the token to GasStation
+  const tx = await gasStation.addPaymentToken(tokenAddress, priceFeedAddress);
+  await tx.wait();
+
+  console.log(`Token ${symbol} added successfully`);
+
+  // Verify token was added
+  const supportedTokens = await gasStation.getSupportedTokens();
+  const isSupported = supportedTokens.includes(tokenAddress);
+  console.log(`Token is now supported: ${isSupported}`);
+};
+```
+
+#### Managing Vaults
+
+```javascript
+// Example using ethers.js v6
+const createAndConfigureVault = async () => {
+  // Initialize contracts with admin signer
+  const gasStation = new ethers.Contract(GAS_STATION_ADDRESS, GAS_STATION_ABI, adminSigner);
+  const vaultFactoryAddress = await gasStation.vaultFactory();
+  const vaultFactory = new ethers.Contract(vaultFactoryAddress, VAULT_FACTORY_ABI, adminSigner);
+
+  // Create a new vault for the GasStation
+  const tx = await vaultFactory.createVault(GAS_STATION_ADDRESS);
+  const receipt = await tx.wait();
+
+  // Find the VaultCreated event to get the new vault address
+  const vaultCreatedEvent = receipt.logs
+    .filter(log => log.address === vaultFactoryAddress)
+    .map(log => {
+      try {
+        return vaultFactory.interface.parseLog(log);
+      } catch (e) {
+        return null;
+      }
+    })
+    .find(event => event && event.name === "VaultCreated");
+
+  if (!vaultCreatedEvent) {
+    throw new Error("Vault creation event not found");
+  }
+
+  const vaultAddress = vaultCreatedEvent.args.vault;
+  console.log(`New vault created at: ${vaultAddress}`);
+
+  // Set the GasStation address in the vault
+  const setGasStationTx = await gasStation.setVaultGasStation(
+    vaultAddress,
+    GAS_STATION_ADDRESS
+  );
+  await setGasStationTx.wait();
+  console.log("GasStation address set in vault");
+
+  // Fund the vault with ETH
+  const fundingTx = await adminSigner.sendTransaction({
+    to: vaultAddress,
+    value: ethers.parseEther("1.0") // Fund with 1 ETH
+  });
+  await fundingTx.wait();
+  console.log("Vault funded with 1 ETH");
+
+  return vaultAddress;
+};
+```
+
+#### Emergency Operations
+
+```javascript
+// Example using ethers.js v6
+const emergencyOperations = async () => {
+  // Initialize contract with admin signer
+  const gasStation = new ethers.Contract(GAS_STATION_ADDRESS, GAS_STATION_ABI, adminSigner);
+
+  // Enable emergency mode
+  console.log("Enabling emergency mode...");
+  const pauseTx = await gasStation.enableEmergencyMode();
+  await pauseTx.wait();
+
+  // Verify contract is paused
+  const isPaused = await gasStation.paused();
+  console.log(`Contract paused: ${isPaused}`);
+
+  // Withdraw tokens in emergency (example with USDC)
+  const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC on mainnet
+  const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
+
+  // Check balance
+  const balance = await usdc.balanceOf(GAS_STATION_ADDRESS);
+  console.log(`USDC balance: ${ethers.formatUnits(balance, 6)} USDC`);
+
+  if (balance > 0) {
+    // Withdraw tokens to admin address
+    const adminAddress = await adminSigner.getAddress();
+    const withdrawTx = await gasStation.emergencyWithdrawToken({
+      token: usdcAddress,
+      amount: balance,
+      to: adminAddress
+    });
+    await withdrawTx.wait();
+    console.log(`Withdrawn ${ethers.formatUnits(balance, 6)} USDC to ${adminAddress}`);
+  }
+
+  // Disable emergency mode when issue is resolved
+  console.log("Disabling emergency mode...");
+  const unpauseTx = await gasStation.disableEmergencyMode();
+  await unpauseTx.wait();
+
+  // Verify contract is unpaused
+  const isStillPaused = await gasStation.paused();
+  console.log(`Contract paused: ${isStillPaused}`);
+};
 ```
 
 ## Error Handling
