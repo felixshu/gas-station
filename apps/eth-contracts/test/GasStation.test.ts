@@ -405,10 +405,10 @@ describe("GasStation", function () {
         .to.emit(gasStation, "DepositProcessed")
         .withArgs(
           await user.getAddress(),
-          await user.getAddress(),
           await mockUSDC.getAddress(),
           depositAmount,
-          ethAmount
+          ethAmount,
+          await user.getAddress()
         );
     });
 
@@ -611,10 +611,10 @@ describe("GasStation", function () {
         .to.emit(gasStation, "DepositProcessed")
         .withArgs(
           await user.getAddress(),
-          await user.getAddress(),
           await mockUSDC.getAddress(),
           depositAmount,
-          ethAmount
+          ethAmount,
+          await user.getAddress()
         );
     });
 
@@ -682,10 +682,10 @@ describe("GasStation", function () {
         .to.emit(gasStation, "DepositProcessed")
         .withArgs(
           await user.getAddress(),
-          await user.getAddress(),
           await mockUSDC.getAddress(), // Default token
           depositAmount,
-          await gasStation.calculateEthAmount(await mockUSDC.getAddress(), depositAmount)
+          await gasStation.calculateEthAmount(await mockUSDC.getAddress(), depositAmount),
+          await user.getAddress()
         );
     });
   });
@@ -818,6 +818,94 @@ describe("GasStation", function () {
       // Verify RateLimitUpdated event has the correct block number
       const updateArgs = (updateEvent as unknown as { args: any[] }).args;
       expect(updateArgs[0]).to.equal(blockNumber);
+    });
+  });
+
+  describe("Deposit Limits", function () {
+    it("should allow owner to update deposit limits", async function () {
+      const newMinDeposit = ethers.parseUnits("20", 6); // 20 USDC
+      const newMaxDeposit = ethers.parseUnits("20000", 6); // 20,000 USDC
+
+      // Update deposit limits
+      const tx = await gasStation.connect(owner).setDepositLimits(newMinDeposit, newMaxDeposit);
+
+      // Verify the event was emitted with correct parameters
+      await expect(tx)
+        .to.emit(gasStation, "DepositLimitsUpdated")
+        .withArgs(newMinDeposit, newMaxDeposit);
+
+      // Verify state was updated
+      expect(await gasStation.minDepositAmount()).to.equal(newMinDeposit);
+      expect(await gasStation.maxDepositAmount()).to.equal(newMaxDeposit);
+    });
+
+    it("should revert when min deposit is greater than or equal to max deposit", async function () {
+      const newMinDeposit = ethers.parseUnits("20000", 6); // 20,000 USDC
+      const newMaxDeposit = ethers.parseUnits("20000", 6); // 20,000 USDC (equal to min)
+
+      // Attempt to update with invalid limits (min = max)
+      await expect(gasStation.connect(owner).setDepositLimits(newMinDeposit, newMaxDeposit))
+        .to.be.revertedWithCustomError(gasStation, "InvalidDepositLimits")
+        .withArgs(newMinDeposit, newMaxDeposit);
+
+      // Attempt to update with invalid limits (min > max)
+      await expect(
+        gasStation.connect(owner).setDepositLimits(newMinDeposit, ethers.parseUnits("19999", 6))
+      ).to.be.revertedWithCustomError(gasStation, "InvalidDepositLimits");
+    });
+
+    it("should not allow non-owner to update deposit limits", async function () {
+      const newMinDeposit = ethers.parseUnits("20", 6); // 20 USDC
+      const newMaxDeposit = ethers.parseUnits("20000", 6); // 20,000 USDC
+
+      // Attempt to update as non-owner
+      await expect(gasStation.connect(user).setDepositLimits(newMinDeposit, newMaxDeposit))
+        .to.be.revertedWithCustomError(gasStation, "OwnableUnauthorizedAccount")
+        .withArgs(await user.getAddress());
+    });
+
+    it("should enforce new deposit limits on exchanges", async function () {
+      // Set new limits
+      const newMinDeposit = ethers.parseUnits("500", 6); // 500 USDC
+      const newMaxDeposit = ethers.parseUnits("5000", 6); // 5,000 USDC
+      await gasStation.connect(owner).setDepositLimits(newMinDeposit, newMaxDeposit);
+
+      // Approve USDC for GasStation
+      await mockUSDC.connect(user).approve(await gasStation.getAddress(), ethers.MaxUint256);
+
+      // Attempt deposit below new minimum
+      const belowMinAmount = ethers.parseUnits("499", 6); // 499 USDC
+      await expect(
+        gasStation.connect(user).exchange({
+          token: await mockUSDC.getAddress(),
+          amount: belowMinAmount,
+          destination: await user.getAddress(),
+        })
+      )
+        .to.be.revertedWithCustomError(gasStation, "AmountBelowMinimum")
+        .withArgs(belowMinAmount, newMinDeposit);
+
+      // Attempt deposit above new maximum
+      const aboveMaxAmount = ethers.parseUnits("5001", 6); // 5,001 USDC
+      await expect(
+        gasStation.connect(user).exchange({
+          token: await mockUSDC.getAddress(),
+          amount: aboveMaxAmount,
+          destination: await user.getAddress(),
+        })
+      )
+        .to.be.revertedWithCustomError(gasStation, "AmountAboveMaximum")
+        .withArgs(aboveMaxAmount, newMaxDeposit);
+
+      // Verify a valid amount within the new limits works
+      const validAmount = ethers.parseUnits("1000", 6); // 1,000 USDC
+      await expect(
+        gasStation.connect(user).exchange({
+          token: await mockUSDC.getAddress(),
+          amount: validAmount,
+          destination: await user.getAddress(),
+        })
+      ).to.not.be.reverted;
     });
   });
 });

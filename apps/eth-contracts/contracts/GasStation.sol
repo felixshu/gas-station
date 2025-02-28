@@ -50,9 +50,10 @@ contract GasStation is
     // @dev Vault factory contract
     VaultFactory public vaultFactory;
     // @dev Maximum number of vaults
-    uint256 public constant MAX_VAULTS = 10; // Limit number of vaults for gas efficiency
-    // @dev Minimum and maximum deposit amounts (in token decimals) - packed into one slot
+    uint256 public constant MAX_VAULTS = 50; // Limit number of vaults for gas efficiency
+    // @dev Minimum deposit amount (in token decimals)
     uint128 public minDepositAmount;
+    // @dev Maximum deposit amount (in token decimals)
     uint128 public maxDepositAmount;
     // @dev Maximum deposits per block
     uint256 public constant MAX_DEPOSITS_PER_BLOCK = 10;
@@ -371,7 +372,7 @@ contract GasStation is
             );
         }
 
-        emit DepositProcessed(msg.sender, effectiveDestination, tokenToUse, amount, ethAmount);
+        emit DepositProcessed(msg.sender, tokenToUse, amount, ethAmount, effectiveDestination);
     }
 
     /**
@@ -565,5 +566,24 @@ contract GasStation is
         uint256 ethAmount = (amountIn18Decimals * (10 ** PRICE_FEED_DECIMALS)) / uint256(price);
 
         return ethAmount;
+    }
+
+    /**
+     * @dev Set the minimum and maximum deposit amounts
+     * @param _minDepositAmount The minimum deposit amount (in token decimals)
+     * @param _maxDepositAmount The maximum deposit amount (in token decimals)
+     */
+    function setDepositLimits(
+        uint128 _minDepositAmount,
+        uint128 _maxDepositAmount
+    ) external onlyOwner {
+        // Ensure min is less than max
+        if (_minDepositAmount >= _maxDepositAmount)
+            revert Errors.InvalidDepositLimits(_minDepositAmount, _maxDepositAmount);
+
+        minDepositAmount = _minDepositAmount;
+        maxDepositAmount = _maxDepositAmount;
+
+        emit DepositLimitsUpdated(_minDepositAmount, _maxDepositAmount);
     }
 }

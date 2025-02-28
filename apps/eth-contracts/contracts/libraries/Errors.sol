@@ -95,4 +95,11 @@ library Errors {
     error ContractPaused();
     //@dev Expected contract to be paused
     error ExpectedPause();
+
+    /**
+     * @dev Error thrown when deposit limits are invalid
+     * @param minAmount The minimum deposit amount
+     * @param maxAmount The maximum deposit amount
+     */
+    error InvalidDepositLimits(uint128 minAmount, uint128 maxAmount);
 }

@@ -52,6 +52,7 @@ A decentralized gas fee payment system that allows users to pay for Ethereum gas
       - [Checking Supported Tokens](#checking-supported-tokens)
     - [Admin Examples](#admin-examples)
       - [Adding a New Payment Token](#adding-a-new-payment-token)
+      - [Setting Deposit Limits](#setting-deposit-limits)
       - [Managing Vaults](#managing-vaults)
       - [Emergency Operations](#emergency-operations)
   - [Admin Role Management](#admin-role-management)
@@ -550,6 +551,12 @@ function disableEmergencyMode() external onlyOwner;
    - Removes a token from the supported tokens list
    - Emits a `PaymentTokenRemoved` event
 
+4. **setDepositLimits**:
+   - Updates the minimum and maximum deposit amounts for tokens
+   - Ensures the minimum amount is less than the maximum amount
+   - Applies to all supported tokens
+   - Emits a `DepositLimitsUpdated` event with new limits
+
 #### Vault Management Functions
 
 1. **setVaultFactory**:
@@ -797,6 +804,38 @@ const addNewPaymentToken = async (tokenAddress, priceFeedAddress) => {
   const supportedTokens = await gasStation.getSupportedTokens();
   const isSupported = supportedTokens.includes(tokenAddress);
   console.log(`Token is now supported: ${isSupported}`);
+};
+```
+
+#### Setting Deposit Limits
+
+```javascript
+// Example using ethers.js v6
+const setTokenDepositLimits = async (minAmount, maxAmount, tokenDecimals = 18) => {
+  // Initialize contract with admin signer
+  const gasStation = new ethers.Contract(GAS_STATION_ADDRESS, GAS_STATION_ABI, adminSigner);
+
+  // Convert amounts to token decimals
+  const minAmountInTokenDecimals = ethers.parseUnits(minAmount.toString(), tokenDecimals);
+  const maxAmountInTokenDecimals = ethers.parseUnits(maxAmount.toString(), tokenDecimals);
+
+  console.log(`Setting deposit limits: Min ${minAmount}, Max ${maxAmount} tokens`);
+
+  // Update the deposit limits
+  const tx = await gasStation.setDepositLimits(
+    minAmountInTokenDecimals,
+    maxAmountInTokenDecimals
+  );
+  await tx.wait();
+
+  console.log(`Deposit limits updated successfully`);
+
+  // Verify the new limits
+  const currentMinAmount = await gasStation.minDepositAmount();
+  const currentMaxAmount = await gasStation.maxDepositAmount();
+
+  console.log(`Current minimum deposit: ${ethers.formatUnits(currentMinAmount, tokenDecimals)} tokens`);
+  console.log(`Current maximum deposit: ${ethers.formatUnits(currentMaxAmount, tokenDecimals)} tokens`);
 };
 ```
 
