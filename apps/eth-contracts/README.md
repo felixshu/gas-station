@@ -35,6 +35,7 @@ A decentralized gas fee payment system that allows users to pay for Ethereum gas
     - [Calculating ETH Amount](#calculating-eth-amount)
   - [Security Considerations](#security-considerations)
     - [Rate Limiting](#rate-limiting)
+    - [Role Separation](#role-separation)
     - [Emergency Procedures](#emergency-procedures)
   - [Interface Integration](#interface-integration)
     - [User-Facing Functions](#user-facing-functions)
@@ -53,6 +54,14 @@ A decentralized gas fee payment system that allows users to pay for Ethereum gas
       - [Adding a New Payment Token](#adding-a-new-payment-token)
       - [Managing Vaults](#managing-vaults)
       - [Emergency Operations](#emergency-operations)
+  - [Admin Role Management](#admin-role-management)
+    - [Admin vs Owner Responsibilities](#admin-vs-owner-responsibilities)
+    - [Admin Role Features](#admin-role-features)
+    - [Code Examples](#code-examples-1)
+      - [Setting a New Admin](#setting-a-new-admin)
+      - [Processing Withdrawals as Admin](#processing-withdrawals-as-admin)
+      - [ETH Withdrawal Example](#eth-withdrawal-example)
+      - [Checking Admin Status](#checking-admin-status)
   - [Error Handling](#error-handling)
   - [Upgradeability](#upgradeability)
   - [Contributing](#contributing)
@@ -122,6 +131,7 @@ graph TD
 - Handles token deposits and ETH withdrawals
 - Features:
   - Token whitelist integration
+  - Admin role for withdrawal management
   - Emergency recovery mechanisms
   - Balance tracking per user/token
 
@@ -148,6 +158,7 @@ graph TD
 
 - Reentrancy protection
 - Pausable contracts
+- Admin role separation for withdrawals
 - Emergency withdrawal mechanisms
 - Owner-only administrative functions
 - Token whitelist validation
@@ -415,6 +426,13 @@ console.log(`You will receive ${ethers.utils.formatEther(ethAmount)} ETH`);
 - Configurable deposit limits
 - Price feed staleness checks
 
+### Role Separation
+
+- Owner role for critical contract management
+- Admin role for withdrawal operations
+- Gas Station role for ETH distribution
+- Clear separation of responsibilities enhances security
+
 ### Emergency Procedures
 
 1. Owner can pause contracts
@@ -542,6 +560,12 @@ function disableEmergencyMode() external onlyOwner;
 2. **setVaultGasStation**:
    - Sets the GasStation address in a specific Vault contract
    - Ensures the vault recognizes the GasStation for operations
+
+3. **setAdmin**:
+   - Sets the admin address responsible for withdrawals
+   - Separates withdrawal permissions from ownership
+   - Emits an `AdminSet` event with previous and new admin addresses
+   - Only callable by the owner
 
 #### Emergency Functions
 
@@ -877,6 +901,120 @@ const emergencyOperations = async () => {
 };
 ```
 
+## Admin Role Management
+
+The Vault contract implements a dedicated admin role that is separate from the owner role. This provides an additional layer of security and flexibility in managing withdrawals.
+
+### Admin vs Owner Responsibilities
+
+- **Owner**: Responsible for contract upgrades, emergency functions, and setting critical addresses
+- **Admin**: Responsible for processing withdrawals on behalf of users
+
+### Admin Role Features
+
+- Initially set to the owner address during initialization
+- Can be updated by the owner to delegate withdrawal responsibilities
+- Required for all token and ETH withdrawals
+- Provides separation of concerns between contract management and operational tasks
+
+### Code Examples
+
+#### Setting a New Admin
+
+```javascript
+// Example using ethers.js v6
+const setVaultAdmin = async (vaultAddress, newAdminAddress) => {
+  // Initialize contract with owner signer
+  const vault = new ethers.Contract(vaultAddress, VAULT_ABI, ownerSigner);
+
+  // Set the new admin
+  const tx = await vault.setAdmin(newAdminAddress);
+  await tx.wait();
+
+  console.log(`Admin updated to: ${newAdminAddress}`);
+
+  // Verify the change
+  const currentAdmin = await vault.admin();
+  console.log(`Current admin: ${currentAdmin}`);
+};
+```
+
+#### Processing Withdrawals as Admin
+
+```javascript
+// Example using ethers.js v6
+const processWithdrawal = async (vaultAddress, userAddress, tokenAddress, amount, recipientAddress) => {
+  // Initialize contract with admin signer
+  const vault = new ethers.Contract(vaultAddress, VAULT_ABI, adminSigner);
+
+  // Convert amount to token decimals
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+  const decimals = await token.decimals();
+  const tokenAmount = ethers.parseUnits(amount.toString(), decimals);
+
+  // Process the withdrawal
+  const tx = await vault.withdrawToken({
+    token: tokenAddress,
+    amount: tokenAmount,
+    recipient: recipientAddress,
+    user: userAddress // Specify which user's balance to withdraw from
+  });
+
+  const receipt = await tx.wait();
+  console.log(`Withdrawal processed: ${receipt.hash}`);
+
+  // Verify the user's remaining balance
+  const remainingBalance = await vault.balances(userAddress, tokenAddress);
+  console.log(`Remaining balance: ${ethers.formatUnits(remainingBalance, decimals)}`);
+};
+```
+
+#### ETH Withdrawal Example
+
+```javascript
+// Example using ethers.js v6
+const processEthWithdrawal = async (vaultAddress, userAddress, amount, recipientAddress) => {
+  // Initialize contract with admin signer
+  const vault = new ethers.Contract(vaultAddress, VAULT_ABI, adminSigner);
+
+  // Convert amount to wei
+  const weiAmount = ethers.parseEther(amount.toString());
+
+  // Process the ETH withdrawal
+  const tx = await vault.withdrawEth({
+    amount: weiAmount,
+    recipient: recipientAddress,
+    user: userAddress // Specify which user's balance to withdraw from
+  });
+
+  const receipt = await tx.wait();
+  console.log(`ETH withdrawal processed: ${receipt.hash}`);
+
+  // Verify the user's remaining ETH balance
+  const remainingBalance = await vault.balances(userAddress, ethers.ZeroAddress);
+  console.log(`Remaining ETH balance: ${ethers.formatEther(remainingBalance)}`);
+};
+```
+
+#### Checking Admin Status
+
+```javascript
+// Example using ethers.js v6
+const checkAdminAccess = async (vaultAddress, addressToCheck) => {
+  // Initialize contract
+  const vault = new ethers.Contract(vaultAddress, VAULT_ABI, provider);
+
+  // Get current admin
+  const currentAdmin = await vault.admin();
+
+  // Check if the address is the admin
+  const isAdmin = currentAdmin.toLowerCase() === addressToCheck.toLowerCase();
+  console.log(`Address ${addressToCheck} is${isAdmin ? '' : ' not'} the admin`);
+
+  return isAdmin;
+};
+```
+
 ## Error Handling
 
 The system uses custom errors for clear error reporting:
@@ -885,6 +1023,9 @@ The system uses custom errors for clear error reporting:
 - `VaultNotFound` - No suitable vault available for the operation
 - `TokenNotSupported` - The token is not on the whitelist
 - `VaultBalanceDistributionNeeded` - ETH balance needs redistribution across vaults
+- `UnauthorizedAccess` - Caller is not the admin for withdrawal operations
+- `InvalidAddress` - Zero address provided for critical parameters
+- `NotGasStation` - Caller is not the authorized gas station
 
 ## Upgradeability
 
