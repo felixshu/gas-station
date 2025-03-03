@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { Vault } from "../Vault.sol";
+import { IVault } from "../interfaces/IVault.sol";
 
 /**
  * @title VaultUtils
@@ -25,6 +26,16 @@ library VaultUtils {
     }
 
     /**
+     * @dev Struct to track source vault state during transfers
+     */
+    struct SourceVaultState {
+        uint256 index;
+        address addr;
+        Vault vault;
+        uint256 balance;
+    }
+
+    /**
      * @dev Move ETH between vaults
      * @param sourceVaults Array of vault addresses with excess ETH
      * @param targetVaults Array of vault addresses that need more ETH
@@ -39,33 +50,30 @@ library VaultUtils {
         uint256[] memory currentBalances
     ) internal returns (uint256 totalMoved) {
         totalMoved = 0;
-        uint256 sourceIndex = 0;
-        address currentSourceAddr = sourceVaults[sourceIndex];
-        Vault currentSource = Vault(payable(currentSourceAddr));
-        uint256 currentSourceBalance = currentSourceAddr.balance;
 
-        // For each target vault that needs ETH
+        // Initialize source vault state
+        SourceVaultState memory sourceState = _initializeSourceVault(sourceVaults, 0);
+
+        // Process each target vault
         for (uint256 i = 0; i < targetVaults.length; i++) {
-            uint256 amountNeeded = 0;
-            if (targetBalances[i] > currentBalances[i]) {
-                amountNeeded = targetBalances[i] - currentBalances[i];
-            } else {
-                continue; // Skip if this vault doesn't need more ETH
-            }
+            // Calculate amount needed for this target
+            uint256 amountNeeded = _calculateAmountNeeded(targetBalances[i], currentBalances[i]);
+            if (amountNeeded == 0) continue;
 
             // Process transfers for this target vault
-            uint256 amountMoved = _processEthTransfersForTarget(
-                sourceVaults,
-                targetVaults[i],
-                amountNeeded,
-                sourceIndex,
-                currentSourceAddr,
-                currentSource,
-                currentSourceBalance
-            );
+            (
+                uint256 amountMoved,
+                SourceVaultState memory updatedState
+            ) = _processEthTransfersForTarget(
+                    sourceVaults,
+                    targetVaults[i],
+                    amountNeeded,
+                    sourceState
+                );
 
-            // Update state variables based on the transfer results
+            // Update state variables
             totalMoved += amountMoved;
+            sourceState = updatedState;
 
             // If we couldn't move all the ETH needed, we've exhausted all sources
             if (amountMoved < amountNeeded) {
@@ -77,66 +85,109 @@ library VaultUtils {
     }
 
     /**
+     * @dev Initialize a source vault state
+     * @param sourceVaults Array of source vault addresses
+     * @param initialIndex Starting index in the sourceVaults array
+     * @return state Initialized source vault state
+     */
+    function _initializeSourceVault(
+        address[] calldata sourceVaults,
+        uint256 initialIndex
+    ) private view returns (SourceVaultState memory state) {
+        if (initialIndex >= sourceVaults.length) {
+            return SourceVaultState(initialIndex, address(0), Vault(payable(address(0))), 0);
+        }
+
+        address addr = sourceVaults[initialIndex];
+        return SourceVaultState(initialIndex, addr, Vault(payable(addr)), addr.balance);
+    }
+
+    /**
+     * @dev Calculate the amount of ETH needed for a target vault
+     * @param targetBalance Target ETH balance
+     * @param currentBalance Current ETH balance
+     * @return amountNeeded Amount of ETH needed (0 if none needed)
+     */
+    function _calculateAmountNeeded(
+        uint256 targetBalance,
+        uint256 currentBalance
+    ) private pure returns (uint256) {
+        return targetBalance > currentBalance ? targetBalance - currentBalance : 0;
+    }
+
+    /**
      * @dev Helper function to process ETH transfers for a single target vault
      * @param sourceVaults Array of source vault addresses
      * @param targetVault Target vault address
      * @param amountNeeded Amount of ETH needed by the target vault
-     * @param sourceIndex Current index in the sourceVaults array
-     * @param currentSourceAddr Current source vault address
-     * @param currentSource Current source vault contract
-     * @param currentSourceBalance Current source vault ETH balance
+     * @param sourceState Current state of the source vault
      * @return amountMoved Total amount of ETH moved to the target vault
+     * @return updatedState Updated state of the source vault
      */
     function _processEthTransfersForTarget(
         address[] calldata sourceVaults,
         address targetVault,
         uint256 amountNeeded,
-        uint256 sourceIndex,
-        address currentSourceAddr,
-        Vault currentSource,
-        uint256 currentSourceBalance
-    ) private returns (uint256 amountMoved) {
+        SourceVaultState memory sourceState
+    ) private returns (uint256 amountMoved, SourceVaultState memory updatedState) {
         amountMoved = 0;
+        updatedState = sourceState;
 
         // Keep moving ETH until this target vault has enough
         while (amountNeeded > 0) {
             // If current source is depleted, move to next source
-            if (currentSourceBalance == 0) {
-                sourceIndex++;
-                if (sourceIndex >= sourceVaults.length) {
+            if (updatedState.balance == 0) {
+                updatedState = _moveToNextSource(sourceVaults, updatedState.index);
+                if (updatedState.addr == address(0)) {
                     // We've exhausted all sources
-                    return amountMoved;
+                    return (amountMoved, updatedState);
                 }
-                currentSourceAddr = sourceVaults[sourceIndex];
-                currentSource = Vault(payable(currentSourceAddr));
-                currentSourceBalance = currentSourceAddr.balance;
             }
 
             // Calculate how much to move from this source
-            uint256 amountToMove = currentSourceBalance > amountNeeded
+            uint256 amountToMove = updatedState.balance > amountNeeded
                 ? amountNeeded
-                : currentSourceBalance;
+                : updatedState.balance;
 
             // Move ETH from source to target
-            try currentSource.sendEth(targetVault, amountToMove) {
+            try
+                updatedState.vault.sendEth(
+                    IVault.EthParams({
+                        amount: amountToMove,
+                        recipient: targetVault,
+                        user: address(0)
+                    })
+                )
+            {
                 // Update balances
-                currentSourceBalance -= amountToMove;
+                updatedState.balance -= amountToMove;
                 amountNeeded -= amountToMove;
                 amountMoved += amountToMove;
             } catch {
                 // If transfer fails, try next source
-                sourceIndex++;
-                if (sourceIndex >= sourceVaults.length) {
+                updatedState = _moveToNextSource(sourceVaults, updatedState.index);
+                if (updatedState.addr == address(0)) {
                     // If we've tried all sources, return what we've moved so far
-                    return amountMoved;
+                    return (amountMoved, updatedState);
                 }
-                currentSourceAddr = sourceVaults[sourceIndex];
-                currentSource = Vault(payable(currentSourceAddr));
-                currentSourceBalance = currentSourceAddr.balance;
             }
         }
 
-        return amountMoved;
+        return (amountMoved, updatedState);
+    }
+
+    /**
+     * @dev Move to the next source vault
+     * @param sourceVaults Array of source vault addresses
+     * @param currentIndex Current index in the sourceVaults array
+     * @return state Updated source vault state
+     */
+    function _moveToNextSource(
+        address[] calldata sourceVaults,
+        uint256 currentIndex
+    ) private view returns (SourceVaultState memory) {
+        uint256 nextIndex = currentIndex + 1;
+        return _initializeSourceVault(sourceVaults, nextIndex);
     }
 
     /**

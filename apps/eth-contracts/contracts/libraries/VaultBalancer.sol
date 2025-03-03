@@ -83,10 +83,11 @@ library VaultBalancer {
         uint256 targetEthBalance,
         uint256 vaultCount
     ) private pure {
-        if (lowerThreshold >= upperThreshold) revert Errors.InvalidLimits();
+        if (lowerThreshold >= upperThreshold)
+            revert Errors.InvalidLimits(lowerThreshold, upperThreshold);
         if (targetEthBalance <= lowerThreshold || targetEthBalance >= upperThreshold)
-            revert Errors.InvalidLimits();
-        if (vaultCount == 0) revert Errors.InvalidLimits();
+            revert Errors.InvalidLimits(targetEthBalance, upperThreshold);
+        if (vaultCount == 0) revert Errors.InvalidLimits(vaultCount, 1);
     }
 
     /**
@@ -196,8 +197,9 @@ library VaultBalancer {
         )
     {
         // Validate inputs
-        if (targetVaults.length != targetBalances.length) revert Errors.InvalidLimits();
-        if (sourceVaults.length == 0 || targetVaults.length == 0) revert Errors.InvalidLimits();
+        if (targetVaults.length != targetBalances.length)
+            revert Errors.InvalidLimits(targetVaults.length, targetBalances.length);
+        if (sourceVaults.length == 0 || targetVaults.length == 0) revert Errors.InvalidLimits(0, 1);
 
         // Calculate how much ETH we need in total for target vaults
         totalEthNeeded = 0;

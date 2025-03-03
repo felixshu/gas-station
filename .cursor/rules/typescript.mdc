@@ -1,3 +1,8 @@
+---
+description: this is the Typescript General Guidlines
+globs: *.ts
+alwaysApply: true
+---
 
 # Nestjs Rules
 

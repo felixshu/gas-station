@@ -32,13 +32,6 @@ interface ITokenWhitelist {
     event CacheUpdated(uint256 offset, uint256 limit);
 
     /**
-     * @dev Check if a token is whitelisted
-     * @param token The token address to check
-     * @return bool True if the token is whitelisted
-     */
-    function isTokenWhitelisted(address token) external view returns (bool);
-
-    /**
      * @dev Add a token to the whitelist
      * @param token The token address to add
      */
@@ -49,4 +42,11 @@ interface ITokenWhitelist {
      * @param token The token address to remove
      */
     function removeToken(address token) external;
+
+    /**
+     * @dev Check if a token is whitelisted
+     * @param token The token address to check
+     * @return bool True if the token is whitelisted
+     */
+    function isTokenWhitelisted(address token) external view returns (bool);
 }
