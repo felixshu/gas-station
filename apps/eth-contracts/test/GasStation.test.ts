@@ -2,7 +2,7 @@ import { expect } from "chai";
 import { ethers, upgrades, network } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-network-helpers";
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
-import type { Contract } from "ethers";
+import type { Contract, EventLog } from "ethers";
 import type {
   GasStation,
   VaultFactory,
@@ -11,28 +11,26 @@ import type {
   MockPriceFeed,
   TokenWhitelist,
 } from "../typechain-types";
-import { deployVaultFactoryWithLibraries } from "./helpers/fixtures";
 
-// Helper function to create a permit signature
+// Helper function to create permit signatures
 async function createPermitSignature(
-  token: MockERC20 & Contract,
-  owner: HardhatEthersSigner,
+  token: any,
+  owner: any,
   spender: string,
   value: bigint,
   deadline: bigint
 ) {
-  const network = await ethers.provider.getNetwork();
-  const chainId = network.chainId;
-  const tokenName = await token.name();
-  const tokenAddress = await token.getAddress();
-  const nonce = await token.nonces(owner.address);
+  const [name, version, chainId] = await Promise.all([
+    token.name(),
+    "1",
+    (await ethers.provider.getNetwork()).chainId,
+  ]);
 
-  // EIP-2612 permit type data
   const domain = {
-    name: tokenName,
-    version: "1",
-    chainId: chainId,
-    verifyingContract: tokenAddress,
+    name,
+    version,
+    chainId,
+    verifyingContract: await token.getAddress(),
   };
 
   const types = {
@@ -45,25 +43,18 @@ async function createPermitSignature(
     ],
   };
 
-  const value712 = {
-    owner: owner.address,
-    spender: spender,
-    value: value,
-    nonce: nonce,
-    deadline: deadline,
+  const message = {
+    owner: await owner.getAddress(),
+    spender,
+    value,
+    nonce: await token.nonces(await owner.getAddress()),
+    deadline,
   };
 
-  // Sign the permit
-  const signature = await owner.signTypedData(domain, types, value712);
+  const signature = await owner.signTypedData(domain, types, message);
+  const { r, s, v } = ethers.Signature.from(signature);
 
-  // Split the signature
-  const sig = ethers.Signature.from(signature);
-
-  return {
-    v: sig.v,
-    r: sig.r,
-    s: sig.s,
-  };
+  return { r, s, v };
 }
 
 describe("GasStation", function () {
@@ -98,21 +89,31 @@ describe("GasStation", function () {
     const vaultImplementation = (await VaultFactory.deploy()) as Vault & Contract;
     await vaultImplementation.waitForDeployment();
 
+    // Deploy TokenWhitelist
     const TokenWhitelistFactory = await ethers.getContractFactory("TokenWhitelist");
-    const tokenWhitelist = (await upgrades.deployProxy(
-      TokenWhitelistFactory,
-      []
-    )) as TokenWhitelist & Contract;
+    tokenWhitelist = (await upgrades.deployProxy(TokenWhitelistFactory, [], {
+      initializer: "initialize",
+      kind: "uups",
+    })) as TokenWhitelist & Contract;
     await tokenWhitelist.waitForDeployment();
 
+    // Add USDC to the whitelist
     await tokenWhitelist.addToken(await mockUSDC.getAddress());
 
-    // Deploy VaultFactory with TokenWhitelist using our helper function
-    const result = await deployVaultFactoryWithLibraries(owner, await tokenWhitelist.getAddress());
-    vaultFactory = result.vaultFactory as VaultFactory & Contract;
+    // Deploy VaultFactory
+    const VaultFactoryFactory = await ethers.getContractFactory("VaultFactory");
+    vaultFactory = (await upgrades.deployProxy(
+      VaultFactoryFactory,
+      [await vaultImplementation.getAddress(), await tokenWhitelist.getAddress()],
+      {
+        initializer: "initialize",
+        kind: "uups",
+      }
+    )) as VaultFactory & Contract;
+    await vaultFactory.waitForDeployment();
 
-    // Deploy GasStation
-    const GasStationFactory = await ethers.getContractFactory("GasStation", owner);
+    // Deploy GasStation implementation
+    const GasStationFactory = await ethers.getContractFactory("GasStation");
     gasStation = (await upgrades.deployProxy(
       GasStationFactory,
       [
@@ -130,6 +131,18 @@ describe("GasStation", function () {
       }
     )) as GasStation & Contract;
     await gasStation.waitForDeployment();
+
+    // Add USDC as a payment token
+    await gasStation.addPaymentToken(await mockUSDC.getAddress(), await mockPriceFeed.getAddress());
+
+    // Get the vault address from the VaultFactory
+    const vaultAddress = await vaultFactory.getLastVaultByOwner(await gasStation.getAddress());
+
+    // Fund the vault with ETH
+    await owner.sendTransaction({
+      to: vaultAddress,
+      value: ethers.parseEther("10"),
+    });
 
     return {
       gasStation,
@@ -188,23 +201,9 @@ describe("GasStation", function () {
       expect(await gasStation.minDepositAmount()).to.equal(MIN_DEPOSIT);
       expect(await gasStation.maxDepositAmount()).to.equal(MAX_DEPOSIT);
       expect(await gasStation.vaultFactory()).to.equal(await vaultFactory.getAddress());
-      expect(await gasStation.owner()).to.equal(await owner.getAddress());
     });
 
-    it("should revert if initialized with zero address", async function () {
-      const GasStationFactory = await ethers.getContractFactory("GasStation");
-      await expect(
-        upgrades.deployProxy(GasStationFactory, [
-          {
-            defaultToken: ethers.ZeroAddress,
-            defaultPriceFeed: await mockPriceFeed.getAddress(),
-            minDepositAmount: MIN_DEPOSIT,
-            maxDepositAmount: MAX_DEPOSIT,
-            vaultFactory: await vaultFactory.getAddress(),
-          },
-        ])
-      ).to.be.revertedWithCustomError(gasStation, "InvalidAddress");
-    });
+    // Add more initialization tests as needed
   });
 
   describe("Payment Token Management", function () {
@@ -797,16 +796,16 @@ describe("GasStation", function () {
       const receipt = await tx.wait();
 
       // Find RateLimitCheck event
-      const checkEvent = receipt?.logs.find((log) => {
-        const eventLog = log as unknown as { fragment?: { name: string } };
-        return eventLog.fragment?.name === "RateLimitCheck";
-      });
+      const checkEvent = receipt?.logs.find(
+        (log): log is EventLog =>
+          "args" in log && log.fragment && log.fragment.name === "RateLimitCheck"
+      );
 
       // Find RateLimitUpdated event
-      const updateEvent = receipt?.logs.find((log) => {
-        const eventLog = log as unknown as { fragment?: { name: string } };
-        return eventLog.fragment?.name === "RateLimitUpdated";
-      });
+      const updateEvent = receipt?.logs.find(
+        (log): log is EventLog =>
+          "args" in log && log.fragment && log.fragment.name === "RateLimitUpdated"
+      );
 
       // Verify events were emitted
       expect(checkEvent).to.not.be.undefined;

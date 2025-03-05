@@ -81,11 +81,11 @@ interface IGasStation {
     // @dev Emergency withdrawal event
     event EmergencyWithdrawal(address indexed token, uint256 amount, address indexed to);
     // @dev Payment token updated event
-    event PaymentTokenUpdated(address indexed token, uint8 decimals, address priceFeed);
+    event PaymentTokenUpdated(address indexed token, uint8 decimals, address indexed priceFeed);
     // @dev Payment token removed event
     event PaymentTokenRemoved(address indexed token);
     // @dev Default token updated event
-    event DefaultTokenUpdated(address indexed newDefaultToken);
+    event DefaultTokenUpdated(address indexed token);
     // @dev Payment token added event
     event PaymentTokenAdded(address indexed token, address indexed priceFeed);
     // @dev Token exchanged event
@@ -100,6 +100,21 @@ interface IGasStation {
     event RateLimitCheck(uint256 currentBlock, uint256 lastProcessedBlock, uint256 currentDeposits);
     // @dev Rate limit updated event
     event RateLimitUpdated(uint256 blockNumber, uint256 newCount);
+
+    // Fee related events
+    event FeeTierAdded(address indexed token, uint256 minAmount, uint256 feeBps);
+    event FeeTierUpdated(
+        address indexed token,
+        uint256 tierIndex,
+        uint256 minAmount,
+        uint256 feeBps
+    );
+    event FeeTierRemoved(address indexed token, uint256 tierIndex);
+    event MaxFeeUpdated(uint256 maxFeeBps);
+    event FeeCollectorUpdated(address indexed feeCollector);
+    event FeeCollectionToggled(bool enabled);
+    event FeesCollected(address indexed token, uint256 amount);
+    event FeesWithdrawn(address indexed token, uint256 amount);
 
     // ======================================================
     // External Functions
@@ -133,8 +148,14 @@ interface IGasStation {
     function getSupportedTokens() external view returns (address[] memory);
     // @dev Calculate ETH amount function
     function calculateEthAmount(address token, uint256 amount) external view returns (uint256);
+    // @dev Calculate fee amount function
+    function calculateFee(address token, uint256 amount) external view returns (uint256);
+    // @dev Calculate amount after fee deduction
+    function calculateAmountAfterFee(address token, uint256 amount) external view returns (uint256);
     // @dev Find best vault function
     function findBestVault(
         uint256 requiredEth
     ) external view returns (address vault, uint256 balance);
 }
+
+// ======================================================

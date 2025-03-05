@@ -42,6 +42,20 @@ contract GasStation is
         uint32 count;
     }
 
+    // @dev Fee tier structure
+    struct FeeTier {
+        uint256 minAmount; // Minimum amount for this tier
+        uint256 feeBps; // Fee in basis points (1% = 100 bps)
+        bool isActive; // Whether this tier is active
+    }
+
+    // @dev Fee configuration
+    struct FeeConfig {
+        uint256 maxFeeBps; // Maximum allowed fee in basis points
+        address feeCollector; // Address to collect fees
+        bool feeEnabled; // Whether fee collection is enabled
+    }
+
     // ======================================================
     // State Variables
     // ======================================================
@@ -73,6 +87,15 @@ contract GasStation is
     // @dev Price feed decimals
     uint256 public constant PRICE_FEED_DECIMALS = 8;
 
+    // @dev Fee tiers for each payment token
+    mapping(address => FeeTier[]) public feeTiers;
+    // @dev Fee configuration
+    FeeConfig public feeConfig;
+    // @dev User's total volume for each token
+    mapping(address => mapping(address => uint256)) public userVolumes;
+    // @dev Total fees collected per token
+    mapping(address => uint256) public totalFeesCollected;
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -82,9 +105,9 @@ contract GasStation is
      * @dev Initialize the contract.
      * @param params Initialization parameters
      */
-    function initialize(InitParams calldata params) public initializer {
-        __ReentrancyGuard_init();
+    function initialize(InitParams calldata params) external initializer {
         __Ownable_init(msg.sender);
+        __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
 
@@ -93,15 +116,43 @@ contract GasStation is
             revert Errors.InvalidAddress(params.defaultPriceFeed);
         if (params.vaultFactory == address(0)) revert Errors.InvalidAddress(params.vaultFactory);
 
+        ethUsdPriceFeed = AggregatorV3Interface(params.defaultPriceFeed);
         vaultFactory = VaultFactory(params.vaultFactory);
-
         minDepositAmount = params.minDepositAmount;
         maxDepositAmount = params.maxDepositAmount;
-
         defaultToken = params.defaultToken;
-        _addPaymentToken(params.defaultToken, params.defaultPriceFeed);
 
-        emit DefaultTokenUpdated(params.defaultToken);
+        // Initialize fee configuration
+        feeConfig = FeeConfig({
+            maxFeeBps: 50, // 0.5% default max fee
+            feeCollector: msg.sender, // Owner collects fees by default
+            feeEnabled: true
+        });
+
+        // Initialize default fee tiers
+        feeTiers[params.defaultToken].push(
+            FeeTier({
+                minAmount: 0,
+                feeBps: 50, // 0.5% for 0-100 USDC
+                isActive: true
+            })
+        );
+        feeTiers[params.defaultToken].push(
+            FeeTier({
+                minAmount: 100 * 10 ** 6, // 100 USDC (6 decimals)
+                feeBps: 40, // 0.4% for 100-500 USDC
+                isActive: true
+            })
+        );
+        feeTiers[params.defaultToken].push(
+            FeeTier({
+                minAmount: 500 * 10 ** 6, // 500 USDC (6 decimals)
+                feeBps: 30, // 0.3% for 500+ USDC
+                isActive: true
+            })
+        );
+
+        _addPaymentToken(params.defaultToken, params.defaultPriceFeed);
     }
 
     /**
@@ -351,6 +402,19 @@ contract GasStation is
         // Check and update rate limit
         _checkAndUpdateRateLimit();
 
+        // Calculate fee if enabled
+        uint256 feeAmount = 0;
+        if (feeConfig.feeEnabled) {
+            feeAmount = calculateFee(tokenToUse, amount);
+            if (feeAmount > 0) {
+                totalFeesCollected[tokenToUse] += feeAmount;
+                emit FeesCollected(tokenToUse, feeAmount);
+            }
+        }
+
+        // Update user volume
+        userVolumes[msg.sender][tokenToUse] += amount;
+
         // Calculate ETH amount and determine effective destination
         uint256 ethAmount = _calculateEthAmount(tokenToUse, amount);
         address effectiveDestination = destination == address(0) ? msg.sender : destination;
@@ -585,5 +649,193 @@ contract GasStation is
         maxDepositAmount = _maxDepositAmount;
 
         emit DepositLimitsUpdated(_minDepositAmount, _maxDepositAmount);
+    }
+
+    /**
+     * @dev Add a new fee tier for a token
+     * @param token The token address
+     * @param minAmount The minimum amount for this tier
+     * @param feeBps The fee in basis points (1% = 100 bps)
+     */
+    function addFeeTier(address token, uint256 minAmount, uint256 feeBps) external onlyOwner {
+        if (token == address(0)) revert Errors.InvalidAddress(token);
+        if (!paymentTokens[token].isSupported) revert Errors.TokenNotSupported(token);
+        if (feeBps > feeConfig.maxFeeBps) revert Errors.MaxFeeExceeded(feeBps, feeConfig.maxFeeBps);
+
+        // Add new tier
+        feeTiers[token].push(FeeTier({ minAmount: minAmount, feeBps: feeBps, isActive: true }));
+
+        emit FeeTierAdded(token, minAmount, feeBps);
+    }
+
+    /**
+     * @dev Update an existing fee tier
+     * @param token The token address
+     * @param tierIndex The index of the tier to update
+     * @param minAmount The new minimum amount for this tier
+     * @param feeBps The new fee in basis points
+     */
+    function updateFeeTier(
+        address token,
+        uint256 tierIndex,
+        uint256 minAmount,
+        uint256 feeBps
+    ) external onlyOwner {
+        if (token == address(0)) revert Errors.InvalidAddress(token);
+        if (!paymentTokens[token].isSupported) revert Errors.TokenNotSupported(token);
+        if (feeBps > feeConfig.maxFeeBps) revert Errors.MaxFeeExceeded(feeBps, feeConfig.maxFeeBps);
+        if (tierIndex >= feeTiers[token].length) revert Errors.FeeTierNotFound(tierIndex);
+
+        // Update tier
+        feeTiers[token][tierIndex].minAmount = minAmount;
+        feeTiers[token][tierIndex].feeBps = feeBps;
+
+        emit FeeTierUpdated(token, tierIndex, minAmount, feeBps);
+    }
+
+    /**
+     * @dev Remove a fee tier
+     * @param token The token address
+     * @param tierIndex The index of the tier to remove
+     */
+    function removeFeeTier(address token, uint256 tierIndex) external onlyOwner {
+        if (token == address(0)) revert Errors.InvalidAddress(token);
+        if (!paymentTokens[token].isSupported) revert Errors.TokenNotSupported(token);
+        if (tierIndex >= feeTiers[token].length) revert Errors.FeeTierNotFound(tierIndex);
+
+        // Remove tier by swapping with last element and popping
+        uint256 lastIndex = feeTiers[token].length - 1;
+        if (tierIndex != lastIndex) {
+            feeTiers[token][tierIndex] = feeTiers[token][lastIndex];
+        }
+        feeTiers[token].pop();
+
+        emit FeeTierRemoved(token, tierIndex);
+    }
+
+    /**
+     * @dev Set the maximum allowed fee in basis points
+     * @param maxFeeBps The maximum fee in basis points
+     */
+    function setMaxFeeBps(uint256 maxFeeBps) external onlyOwner {
+        feeConfig.maxFeeBps = maxFeeBps;
+        emit MaxFeeUpdated(maxFeeBps);
+    }
+
+    /**
+     * @dev Set the fee collector address
+     * @param feeCollector The new fee collector address
+     */
+    function setFeeCollector(address feeCollector) external onlyOwner {
+        if (feeCollector == address(0)) revert Errors.InvalidAddress(feeCollector);
+        feeConfig.feeCollector = feeCollector;
+        emit FeeCollectorUpdated(feeCollector);
+    }
+
+    /**
+     * @dev Toggle fee collection on/off
+     * @param enabled Whether to enable or disable fee collection
+     */
+    function toggleFeeCollection(bool enabled) external onlyOwner {
+        feeConfig.feeEnabled = enabled;
+        emit FeeCollectionToggled(enabled);
+    }
+
+    /**
+     * @dev Calculate the fee for a given token amount
+     * @param token The token address
+     * @param amount The amount to calculate fee for
+     * @return feeAmount The fee amount in the same token
+     */
+    function calculateFee(address token, uint256 amount) public view returns (uint256) {
+        if (!feeConfig.feeEnabled) return 0;
+        if (!paymentTokens[token].isSupported) revert Errors.TokenNotSupported(token);
+
+        // Get the applicable tier
+        FeeTier memory tier = getApplicableTier(token, amount);
+        if (!tier.isActive) return 0;
+
+        // Calculate fee: amount * feeBps / 10000
+        return (amount * tier.feeBps) / 10000;
+    }
+
+    /**
+     * @dev Calculate the amount after fee deduction
+     * @param token The token address
+     * @param amount The original amount
+     * @return amountAfterFee The amount after fee deduction
+     */
+    function calculateAmountAfterFee(
+        address token,
+        uint256 amount
+    ) external view returns (uint256) {
+        uint256 fee = calculateFee(token, amount);
+        return amount - fee;
+    }
+
+    /**
+     * @dev Get the applicable fee tier for a given token amount
+     * @param token The token address
+     * @param amount The amount to find tier for
+     * @return The applicable fee tier
+     */
+    function getApplicableTier(address token, uint256 amount) public view returns (FeeTier memory) {
+        FeeTier[] memory tiers = feeTiers[token];
+        if (tiers.length == 0) return FeeTier({ minAmount: 0, feeBps: 0, isActive: false });
+
+        // Find the highest applicable tier
+        for (uint256 i = tiers.length; i > 0; i--) {
+            if (amount >= tiers[i - 1].minAmount) {
+                return tiers[i - 1];
+            }
+        }
+
+        // If no tier applies, return the lowest tier
+        return tiers[0];
+    }
+
+    /**
+     * @dev Withdraw collected fees for a token
+     * @param token The token to withdraw fees for
+     */
+    function withdrawFees(address token) external onlyOwner {
+        if (token == address(0)) revert Errors.InvalidAddress(token);
+        if (!paymentTokens[token].isSupported) revert Errors.TokenNotSupported(token);
+
+        uint256 amount = totalFeesCollected[token];
+        if (amount == 0) revert Errors.ZeroAmount();
+
+        totalFeesCollected[token] = 0;
+        IERC20(token).safeTransfer(feeConfig.feeCollector, amount);
+
+        emit FeesWithdrawn(token, amount);
+    }
+
+    /**
+     * @dev Get all fee tiers for a token
+     * @param token The token address
+     * @return The array of fee tiers
+     */
+    function getFeeTiers(address token) external view returns (FeeTier[] memory) {
+        return feeTiers[token];
+    }
+
+    /**
+     * @dev Get the total volume for a user and token
+     * @param user The user address
+     * @param token The token address
+     * @return The total volume
+     */
+    function getUserVolume(address user, address token) external view returns (uint256) {
+        return userVolumes[user][token];
+    }
+
+    /**
+     * @dev Get the total fees collected for a token
+     * @param token The token address
+     * @return The total fees collected
+     */
+    function getTotalFeesCollected(address token) external view returns (uint256) {
+        return totalFeesCollected[token];
     }
 }

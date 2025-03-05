@@ -102,4 +102,16 @@ library Errors {
      * @param maxAmount The maximum deposit amount
      */
     error InvalidDepositLimits(uint128 minAmount, uint128 maxAmount);
+
+    // Fee related errors
+    //@dev Fee tier not found
+    error FeeTierNotFound(uint256 tierIndex);
+    //@dev Maximum fee exceeded
+    error MaxFeeExceeded(uint256 feeBps, uint256 maxFeeBps);
+    //@dev Fee collection disabled
+    error FeeCollectionDisabled();
+    //@dev Invalid fee collector
+    error InvalidFeeCollector();
+    //@dev Invalid fee tier
+    error InvalidFeeTier(uint256 minAmount, uint256 feeBps);
 }
