@@ -148,8 +148,14 @@ interface IGasStation {
     function getSupportedTokens() external view returns (address[] memory);
     // @dev Calculate ETH amount function
     function calculateEthAmount(address token, uint256 amount) external view returns (uint256);
+    // @dev Calculate fee amount function
+    function calculateFee(address token, uint256 amount) external view returns (uint256);
+    // @dev Calculate amount after fee deduction
+    function calculateAmountAfterFee(address token, uint256 amount) external view returns (uint256);
     // @dev Find best vault function
     function findBestVault(
         uint256 requiredEth
     ) external view returns (address vault, uint256 balance);
 }
+
+// ======================================================

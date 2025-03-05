@@ -2,7 +2,7 @@ import { expect } from "chai";
 import { ethers, upgrades, network } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-network-helpers";
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
-import type { Contract, EventLog, Log } from "ethers";
+import type { Contract, EventLog } from "ethers";
 import type {
   GasStation,
   VaultFactory,
@@ -11,7 +11,6 @@ import type {
   MockPriceFeed,
   TokenWhitelist,
 } from "../typechain-types";
-import { deployVaultFactoryWithLibraries } from "./helpers/fixtures";
 
 // Helper function to create permit signatures
 async function createPermitSignature(

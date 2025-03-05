@@ -760,6 +760,20 @@ contract GasStation is
     }
 
     /**
+     * @dev Calculate the amount after fee deduction
+     * @param token The token address
+     * @param amount The original amount
+     * @return amountAfterFee The amount after fee deduction
+     */
+    function calculateAmountAfterFee(
+        address token,
+        uint256 amount
+    ) external view returns (uint256) {
+        uint256 fee = calculateFee(token, amount);
+        return amount - fee;
+    }
+
+    /**
      * @dev Get the applicable fee tier for a given token amount
      * @param token The token address
      * @param amount The amount to find tier for

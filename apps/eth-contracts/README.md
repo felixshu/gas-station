@@ -45,6 +45,27 @@ A decentralized gas fee payment system that allows users to pay for Ethereum gas
       - [Token Management Functions](#token-management-functions)
       - [Vault Management Functions](#vault-management-functions)
       - [Emergency Functions](#emergency-functions)
+  - [Fee Module](#fee-module)
+    - [Fee Structure](#fee-structure)
+    - [Fee Configuration](#fee-configuration)
+    - [User-Facing Fee Functions](#user-facing-fee-functions)
+      - [Calculate Fee](#calculate-fee)
+      - [Calculate Amount After Fee](#calculate-amount-after-fee)
+      - [Get Applicable Fee Tier](#get-applicable-fee-tier)
+      - [Get User Volume](#get-user-volume)
+      - [Get Total Fees Collected](#get-total-fees-collected)
+      - [Get Fee Tiers](#get-fee-tiers)
+    - [Admin Fee Functions](#admin-fee-functions)
+      - [Add Fee Tier](#add-fee-tier)
+      - [Update Fee Tier](#update-fee-tier)
+      - [Remove Fee Tier](#remove-fee-tier)
+      - [Set Maximum Fee](#set-maximum-fee)
+      - [Set Fee Collector](#set-fee-collector)
+      - [Toggle Fee Collection](#toggle-fee-collection)
+      - [Withdraw Fees](#withdraw-fees)
+    - [Fee Events](#fee-events)
+    - [Integration Example: Displaying Fee Information](#integration-example-displaying-fee-information)
+    - [Fee Module Security Considerations](#fee-module-security-considerations)
   - [Code Examples](#code-examples)
     - [User Interaction Examples](#user-interaction-examples)
       - [Basic Token Exchange](#basic-token-exchange)
@@ -465,6 +486,12 @@ function findBestVault(uint256 requiredEth) external view returns (address vault
 
 // Get the scaling factor for a token (debug function)
 function getScalingFactor(address token) external view returns (uint64);
+
+// Calculate the fee for a given token amount
+function calculateFee(address token, uint256 amount) external view returns (uint256);
+
+// Calculate the amount after fee deduction
+function calculateAmountAfterFee(address token, uint256 amount) external view returns (uint256);
 ```
 
 #### How Exchange Functions Work
@@ -590,6 +617,456 @@ function disableEmergencyMode() external onlyOwner;
 3. **disableEmergencyMode**:
    - Unpauses the contract, resuming normal operation
    - Emits an `EmergencyModeDisabled` event
+
+## Fee Module
+
+The Gas Station includes a comprehensive fee module that allows for flexible fee management based on transaction amounts. This module enables the protocol to collect fees on token exchanges, which can be used for protocol sustainability, treasury growth, or other purposes.
+
+### Fee Structure
+
+The fee system is built around the concept of tiered fees, where different fee percentages are applied based on the transaction amount:
+
+```solidity
+// Fee tier structure
+struct FeeTier {
+    uint256 minAmount; // Minimum amount for this tier
+    uint256 feeBps; // Fee in basis points (1% = 100 bps)
+    bool isActive; // Whether this tier is active
+}
+```
+
+By default, the system initializes with three tiers for the default token (e.g., USDC):
+1. Tier 1: 0-100 USDC with a 0.5% fee (50 basis points)
+2. Tier 2: 100-500 USDC with a 0.4% fee (40 basis points)
+3. Tier 3: 500+ USDC with a 0.3% fee (30 basis points)
+
+This tiered approach incentivizes larger transactions by offering lower fee percentages.
+
+### Fee Configuration
+
+The fee module includes several configuration options:
+
+```solidity
+// Fee configuration
+struct FeeConfig {
+    uint256 maxFeeBps; // Maximum allowed fee in basis points
+    address feeCollector; // Address to collect fees
+    bool feeEnabled; // Whether fee collection is enabled
+}
+```
+
+- `maxFeeBps`: The maximum fee percentage that can be set for any tier (default: 50 basis points or 0.5%)
+- `feeCollector`: The address that receives collected fees (default: contract owner)
+- `feeEnabled`: A toggle to enable/disable fee collection globally
+
+### User-Facing Fee Functions
+
+Users can interact with the following fee-related functions:
+
+#### Calculate Fee
+
+```solidity
+function calculateFee(address token, uint256 amount) public view returns (uint256)
+```
+
+This function calculates the fee amount for a given token and amount based on the applicable fee tier. It returns the fee amount in the same token.
+
+**Parameters:**
+- `token`: The token address
+- `amount`: The amount to calculate the fee for
+
+**Returns:**
+- `uint256`: The fee amount in the same token
+
+**Example:**
+```javascript
+// Calculate fee for 1000 USDC
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const amount = ethers.parseUnits("1000", 6); // USDC has 6 decimals
+const fee = await gasStation.calculateFee(usdcAddress, amount);
+console.log(`Fee: ${ethers.formatUnits(fee, 6)} USDC`); // Should be 3 USDC (0.3%)
+```
+
+#### Calculate Amount After Fee
+
+```solidity
+function calculateAmountAfterFee(address token, uint256 amount) external view returns (uint256)
+```
+
+This function calculates the amount a user will receive after fee deduction. It's useful for displaying the net amount to users before they execute a transaction.
+
+**Parameters:**
+- `token`: The token address
+- `amount`: The original amount
+
+**Returns:**
+- `uint256`: The amount after fee deduction
+
+**Example:**
+```javascript
+// Calculate net amount after fee for 1000 USDC
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const amount = ethers.parseUnits("1000", 6);
+const amountAfterFee = await gasStation.calculateAmountAfterFee(usdcAddress, amount);
+console.log(`Amount after fee: ${ethers.formatUnits(amountAfterFee, 6)} USDC`); // Should be 997 USDC
+```
+
+#### Get Applicable Fee Tier
+
+```solidity
+function getApplicableTier(address token, uint256 amount) public view returns (FeeTier memory)
+```
+
+This function returns the applicable fee tier for a given token amount.
+
+**Parameters:**
+
+- `token`: The token address
+- `amount`: The amount to find the tier for
+
+**Returns:**
+
+
+- `FeeTier`: The applicable fee tier structure
+
+**Example:**
+
+```javascript
+// Get the applicable fee tier for 1000 USDC
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const amount = ethers.parseUnits("1000", 6);
+const tier = await gasStation.getApplicableTier(usdcAddress, amount);
+console.log(`Tier minimum amount: ${ethers.formatUnits(tier.minAmount, 6)} USDC`);
+console.log(`Tier fee: ${tier.feeBps / 100}%`);
+```
+
+#### Get User Volume
+
+```solidity
+function getUserVolume(address user, address token) external view returns (uint256)
+```
+
+This function returns the total volume of a specific token that a user has exchanged through the Gas Station.
+
+**Parameters:**
+
+- `user`: The user address
+- `token`: The token address
+
+**Returns:**
+
+- `uint256`: The total volume
+
+**Example:**
+
+```javascript
+// Get user's total USDC volume
+const userAddress = "0x...";
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const volume = await gasStation.getUserVolume(userAddress, usdcAddress);
+console.log(`Total volume: ${ethers.formatUnits(volume, 6)} USDC`);
+```
+
+#### Get Total Fees Collected
+
+```solidity
+function getTotalFeesCollected(address token) external view returns (uint256)
+```
+
+This function returns the total fees collected for a specific token.
+
+**Parameters:**
+
+- `token`: The token address
+
+**Returns:**
+
+- `uint256`: The total fees collected
+
+**Example:**
+
+```javascript
+// Get total USDC fees collected
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const fees = await gasStation.getTotalFeesCollected(usdcAddress);
+console.log(`Total fees collected: ${ethers.formatUnits(fees, 6)} USDC`);
+```
+
+#### Get Fee Tiers
+
+```solidity
+function getFeeTiers(address token) external view returns (FeeTier[] memory)
+```
+
+This function returns all fee tiers for a specific token.
+
+**Parameters:**
+
+- `token`: The token address
+
+**Returns:**
+
+- `FeeTier[]`: Array of fee tiers
+
+**Example:**
+
+```javascript
+// Get all fee tiers for USDC
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const tiers = await gasStation.getFeeTiers(usdcAddress);
+console.log(`Number of tiers: ${tiers.length}`);
+tiers.forEach((tier, index) => {
+  console.log(`Tier ${index + 1}:`);
+  console.log(`  Min Amount: ${ethers.formatUnits(tier.minAmount, 6)} USDC`);
+  console.log(`  Fee: ${tier.feeBps / 100}%`);
+  console.log(`  Active: ${tier.isActive}`);
+});
+```
+
+### Admin Fee Functions
+
+The following functions are available to the contract owner for managing fees:
+
+#### Add Fee Tier
+
+```solidity
+function addFeeTier(address token, uint256 minAmount, uint256 feeBps) external onlyOwner
+```
+
+This function adds a new fee tier for a specific token.
+
+**Parameters:**
+
+- `token`: The token address
+- `minAmount`: The minimum amount for this tier
+- `feeBps`: The fee in basis points (1% = 100 bps)
+
+**Example:**
+
+```javascript
+// Add a new fee tier for USDC: 1000+ USDC with 0.2% fee
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const minAmount = ethers.parseUnits("1000", 6);
+const feeBps = 20; // 0.2%
+await gasStation.addFeeTier(usdcAddress, minAmount, feeBps);
+```
+
+#### Update Fee Tier
+
+```solidity
+function updateFeeTier(address token, uint256 tierIndex, uint256 minAmount, uint256 feeBps) external onlyOwner
+```
+
+This function updates an existing fee tier.
+
+**Parameters:**
+
+- `token`: The token address
+- `tierIndex`: The index of the tier to update
+- `minAmount`: The new minimum amount for this tier
+- `feeBps`: The new fee in basis points
+
+**Example:**
+
+```javascript
+// Update the second tier for USDC: 100-500 USDC with 0.35% fee
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const tierIndex = 1; // 0-based index, so 1 is the second tier
+const minAmount = ethers.parseUnits("100", 6);
+const feeBps = 35; // 0.35%
+await gasStation.updateFeeTier(usdcAddress, tierIndex, minAmount, feeBps);
+```
+
+#### Remove Fee Tier
+
+```solidity
+function removeFeeTier(address token, uint256 tierIndex) external onlyOwner
+```
+
+This function removes a fee tier.
+
+**Parameters:**
+
+- `token`: The token address
+- `tierIndex`: The index of the tier to remove
+
+**Example:**
+
+```javascript
+// Remove the third tier for USDC
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const tierIndex = 2; // 0-based index, so 2 is the third tier
+await gasStation.removeFeeTier(usdcAddress, tierIndex);
+```
+
+#### Set Maximum Fee
+
+```solidity
+function setMaxFeeBps(uint256 maxFeeBps) external onlyOwner
+```
+
+This function sets the maximum allowed fee in basis points.
+
+**Parameters:**
+
+- `maxFeeBps`: The maximum fee in basis points
+
+**Example:**
+
+```javascript
+// Set maximum fee to 1% (100 basis points)
+const maxFeeBps = 100;
+await gasStation.setMaxFeeBps(maxFeeBps);
+```
+
+#### Set Fee Collector
+
+```solidity
+function setFeeCollector(address feeCollector) external onlyOwner
+```
+
+This function sets the address that will receive collected fees.
+
+**Parameters:**
+
+- `feeCollector`: The new fee collector address
+
+**Example:**
+
+```javascript
+// Set fee collector to treasury address
+const treasuryAddress = "0x...";
+await gasStation.setFeeCollector(treasuryAddress);
+```
+
+#### Toggle Fee Collection
+
+```solidity
+function toggleFeeCollection(bool enabled) external onlyOwner
+```
+
+This function enables or disables fee collection globally.
+
+**Parameters:**
+
+- `enabled`: Whether to enable or disable fee collection
+
+**Example:**
+
+```javascript
+// Disable fee collection
+await gasStation.toggleFeeCollection(false);
+
+// Later, re-enable fee collection
+await gasStation.toggleFeeCollection(true);
+```
+
+#### Withdraw Fees
+
+```solidity
+function withdrawFees(address token) external onlyOwner
+```
+
+This function withdraws collected fees for a specific token to the fee collector address.
+
+**Parameters:**
+
+- `token`: The token to withdraw fees for
+
+**Example:**
+
+```javascript
+// Withdraw collected USDC fees
+const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+await gasStation.withdrawFees(usdcAddress);
+```
+
+### Fee Events
+
+The fee module emits the following events:
+
+```solidity
+// Fee related events
+event FeeTierAdded(address indexed token, uint256 minAmount, uint256 feeBps);
+event FeeTierUpdated(address indexed token, uint256 tierIndex, uint256 minAmount, uint256 feeBps);
+event FeeTierRemoved(address indexed token, uint256 tierIndex);
+event MaxFeeUpdated(uint256 maxFeeBps);
+event FeeCollectorUpdated(address indexed feeCollector);
+event FeeCollectionToggled(bool enabled);
+event FeesCollected(address indexed token, uint256 amount);
+event FeesWithdrawn(address indexed token, uint256 amount);
+```
+
+These events can be used to track fee-related activities and build analytics dashboards.
+
+### Integration Example: Displaying Fee Information
+
+Here's an example of how to integrate fee information into a frontend application:
+
+```javascript
+// Function to display fee information for a token
+async function displayFeeInfo(tokenAddress, amount) {
+  // Initialize contracts
+  const gasStation = new ethers.Contract(GAS_STATION_ADDRESS, GAS_STATION_ABI, provider);
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+
+  // Get token details
+  const [symbol, decimals] = await Promise.all([
+    token.symbol(),
+    token.decimals()
+  ]);
+
+  // Format amount for display
+  const formattedAmount = ethers.formatUnits(amount, decimals);
+
+  // Get fee information
+  const [fee, amountAfterFee, tier, isFeeEnabled] = await Promise.all([
+    gasStation.calculateFee(tokenAddress, amount),
+    gasStation.calculateAmountAfterFee(tokenAddress, amount),
+    gasStation.getApplicableTier(tokenAddress, amount),
+    gasStation.feeConfig().then(config => config.feeEnabled)
+  ]);
+
+  // Format fee for display
+  const formattedFee = ethers.formatUnits(fee, decimals);
+  const formattedAmountAfterFee = ethers.formatUnits(amountAfterFee, decimals);
+  const feePercentage = (tier.feeBps / 100).toFixed(2);
+
+  // Display information
+  console.log(`Token: ${symbol}`);
+  console.log(`Amount: ${formattedAmount} ${symbol}`);
+  console.log(`Fee Enabled: ${isFeeEnabled}`);
+
+  if (isFeeEnabled) {
+    console.log(`Fee Tier: ${ethers.formatUnits(tier.minAmount, decimals)}+ ${symbol}`);
+    console.log(`Fee Percentage: ${feePercentage}%`);
+    console.log(`Fee Amount: ${formattedFee} ${symbol}`);
+    console.log(`Amount After Fee: ${formattedAmountAfterFee} ${symbol}`);
+  } else {
+    console.log(`Fees are currently disabled`);
+  }
+
+  // Calculate ETH amount
+  const ethAmount = await gasStation.calculateEthAmount(tokenAddress, amountAfterFee);
+  console.log(`ETH Amount: ${ethers.formatEther(ethAmount)} ETH`);
+}
+```
+
+### Fee Module Security Considerations
+
+When working with the fee module, consider the following security aspects:
+
+1. **Fee Limits**: The `maxFeeBps` parameter ensures that fees cannot exceed a certain percentage, protecting users from excessive fees.
+
+2. **Owner Controls**: Only the contract owner can modify fee configurations, so proper access control is essential.
+
+3. **Fee Collector**: The fee collector address should be secure and regularly monitored, as it receives all collected fees.
+
+4. **Fee Tiers**: When designing fee tiers, ensure they are logical and don't create edge cases where users might pay higher fees for larger amounts.
+
+5. **Fee Calculation**: The fee calculation uses integer division, which may result in rounding errors for very small amounts. Consider this when setting minimum deposit amounts.
+
+6. **Fee Events**: Monitor fee-related events to detect any unusual activity or potential issues with fee collection.
 
 ## Code Examples
 
