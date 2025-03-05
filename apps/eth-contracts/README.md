@@ -672,13 +672,16 @@ function calculateFee(address token, uint256 amount) public view returns (uint25
 This function calculates the fee amount for a given token and amount based on the applicable fee tier. It returns the fee amount in the same token.
 
 **Parameters:**
+
 - `token`: The token address
 - `amount`: The amount to calculate the fee for
 
 **Returns:**
+
 - `uint256`: The fee amount in the same token
 
 **Example:**
+
 ```javascript
 // Calculate fee for 1000 USDC
 const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
@@ -696,13 +699,16 @@ function calculateAmountAfterFee(address token, uint256 amount) external view re
 This function calculates the amount a user will receive after fee deduction. It's useful for displaying the net amount to users before they execute a transaction.
 
 **Parameters:**
+
 - `token`: The token address
 - `amount`: The original amount
 
 **Returns:**
+
 - `uint256`: The amount after fee deduction
 
 **Example:**
+
 ```javascript
 // Calculate net amount after fee for 1000 USDC
 const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
@@ -725,7 +731,6 @@ This function returns the applicable fee tier for a given token amount.
 - `amount`: The amount to find the tier for
 
 **Returns:**
-
 
 - `FeeTier`: The applicable fee tier structure
 
