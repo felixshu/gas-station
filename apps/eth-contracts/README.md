@@ -79,7 +79,6 @@ A decentralized gas fee payment system that allows users to pay for Ethereum gas
   - [Admin Role Management](#admin-role-management)
     - [Admin vs Owner Responsibilities](#admin-vs-owner-responsibilities)
     - [Admin Role Features](#admin-role-features)
-    - [Code Examples](#code-examples-1)
       - [Setting a New Admin](#setting-a-new-admin)
       - [Processing Withdrawals as Admin](#processing-withdrawals-as-admin)
       - [ETH Withdrawal Example](#eth-withdrawal-example)
@@ -636,6 +635,7 @@ struct FeeTier {
 ```
 
 By default, the system initializes with three tiers for the default token (e.g., USDC):
+
 1. Tier 1: 0-100 USDC with a 0.5% fee (50 basis points)
 2. Tier 2: 100-500 USDC with a 0.4% fee (40 basis points)
 3. Tier 3: 500+ USDC with a 0.3% fee (30 basis points)
@@ -1437,8 +1437,6 @@ The Vault contract implements a dedicated admin role that is separate from the o
 - Can be updated by the owner to delegate withdrawal responsibilities
 - Required for all token and ETH withdrawals
 - Provides separation of concerns between contract management and operational tasks
-
-### Code Examples
 
 #### Setting a New Admin
 
