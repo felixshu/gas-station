@@ -164,9 +164,6 @@ contract Vault is
         address token = params.token;
         uint256 amount = params.amount;
 
-        // Transfer tokens from sender to vault
-        IERC20(token).safeTransferFrom(sender, address(this), amount);
-
         // Cache the current balance to avoid multiple storage reads
         uint256 currentBalance = _balances[sender][token];
         uint256 newBalance = currentBalance + amount;
@@ -176,6 +173,9 @@ contract Vault is
 
         // Update total deposits
         _totalDeposits[token] += amount;
+
+        // Transfer tokens from sender to vault
+        IERC20(token).safeTransferFrom(sender, address(this), amount);
 
         emit Deposited(sender, token, amount);
     }
@@ -202,8 +202,7 @@ contract Vault is
         _totalDeposits[address(0)] -= amount;
 
         // Transfer ETH
-        (bool success, ) = recipient.call{ value: amount }("");
-        if (!success) revert Errors.TransferFailed(address(0), address(this), recipient, amount);
+        Address.sendValue(payable(recipient), amount);
 
         emit Withdrawn(userAddress, address(0), amount);
     }
